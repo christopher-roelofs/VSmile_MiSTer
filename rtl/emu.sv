@@ -84,6 +84,7 @@ wire ce_27 = (ce_div == 2'd3);
 wire  [1:0] buttons;
 wire [127:0] status;
 wire [31:0] joystick_0;
+wire [15:0] joystick_l_analog_0;      // {Y, X} signed, left stick
 wire        forced_scandoubler;
 wire [21:0] gamma_bus;
 
@@ -106,6 +107,7 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
     .forced_scandoubler(forced_scandoubler),
 
     .joystick_0      (joystick_0),
+    .joystick_l_analog_0(joystick_l_analog_0),
 
     .ioctl_download  (ioctl_download),
     .ioctl_wr        (ioctl_wr),
@@ -239,10 +241,13 @@ always @(*) case (status[6:3])
 endcase
 
 // MiSTer joystick: 0=R 1=L 2=D 3=U, then J1: 4=Green 5=Blue 6=Yellow 7=Red
-// 8=OK 9=Quit 10=Help 11=ABC.  Pad bit order follows MAME's ports.
+// 8=OK 9=Quit 10=Help 11=ABC.  Pad bit order follows MAME's ports.  The
+// left analog stick moves the V.Smile joystick as well as the d-pad does.
+wire signed [7:0] ax = joystick_l_analog_0[7:0], ay = joystick_l_analog_0[15:8];
+wire a_r = ax >  8'sd48, a_l = ax < -8'sd48, a_d = ay >  8'sd48, a_u = ay < -8'sd48;
 reg [3:0] joy_s, colors_s, buttons_s;
 always @(posedge clk_sys) begin
-    joy_s     <= {joystick_0[0], joystick_0[1], joystick_0[2], joystick_0[3]};  // right left down up
+    joy_s     <= {joystick_0[0] | a_r, joystick_0[1] | a_l, joystick_0[2] | a_d, joystick_0[3] | a_u};  // right left down up
     colors_s  <= joystick_0[7:4];                                               // red yellow blue green
     buttons_s <= joystick_0[11:8];                                              // abc help quit ok
 end
