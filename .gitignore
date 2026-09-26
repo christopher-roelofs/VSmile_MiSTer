@@ -1,0 +1,10 @@
+ROMS/
+roms/
+*.zip
+*.bin
+sim/*/obj_dir/
+*.vcd
+*.fst
+db/
+incremental_db/
+output_files/
