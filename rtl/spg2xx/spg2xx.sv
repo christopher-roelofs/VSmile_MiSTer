@@ -223,7 +223,7 @@ module spg2xx (
     // ------------------------------------------------------------------
     // Bus unit: one access at a time for the CPU or a DMA engine
     // ------------------------------------------------------------------
-    typedef enum logic [1:0] { A_IDLE, A_BRAM, A_EXT, A_REG } astate_t;
+    typedef enum logic [2:0] { A_IDLE, A_BRAM, A_EXT, A_REG, A_AUD } astate_t;
     astate_t ast;
 
     // DMA engine
@@ -270,7 +270,7 @@ module spg2xx (
     wire is_audio = !is_ext && q_addr[13:11] == 3'b110;               // 3000-37FF
     wire is_io    = !is_ext && q_addr[13:8] == 6'h3d;
     wire is_dma   = !is_ext && q_addr[13:2] == 12'hf80;               // 3E00-3E03
-    wire is_bram  = is_ram || is_vram || is_audio;
+    wire is_bram  = is_ram || is_vram;
     // SoC register ranges MAME's trace logs (for the sim override)
     wire is_logged = is_vreg || is_audio || is_io || (!is_ext && q_addr[13:8] == 6'h3e);
 
@@ -314,11 +314,12 @@ module spg2xx (
     // (audio register reads complete, and are reported, a clk later)
     logic [15:0] audio_addr_q;
     assign spu_req          = go && is_audio;
-    assign dbg_io_rd        = (in_reg && rq_rd && rq_logged && rq_cpu) || (ast == A_BRAM && audio_rd_q);
+    wire   aud_done         = (ast == A_AUD) && spu_ack;
+    assign dbg_io_rd        = (in_reg && rq_rd && rq_logged && rq_cpu) || (aud_done && audio_rd_q);
     assign dbg_io_wr        = (in_reg && rq_wr && rq_logged && rq_cpu) || (go && q_wr && is_audio && sel_cpu);
-    assign dbg_io_addr      = (ast == A_BRAM) ? audio_addr_q : in_reg ? rq_addr : q_addr[15:0];
+    assign dbg_io_addr      = (ast == A_AUD) ? audio_addr_q : in_reg ? rq_addr : q_addr[15:0];
     assign dbg_io_wdata     = in_reg ? rq_wdata : q_wdata;
-    assign dbg_io_rtl_rdata = (ast == A_BRAM) ? spu_rdata : reg_rdata;
+    assign dbg_io_rtl_rdata = (ast == A_AUD) ? spu_rdata : reg_rdata;
 
     // ext bus: address/data latched when the access is accepted (another
     // requester may be selected while it is in flight)
@@ -348,10 +349,12 @@ module spg2xx (
             A_IDLE: if (go) begin
                 owner <= sel_spu ? 2'd2 : sel_ppu ? 2'd3 : sel_dma ? 2'd1 : 2'd0;
                 if (sel_dma) dma_wait <= 1'b1;
-                if (is_bram) begin
-                    bram_sel     <= is_ram ? 2'd0 : is_vram ? 2'd1 : 2'd2;
-                    audio_rd_q   <= is_audio && q_rd && sel_cpu;
+                if (is_audio) begin
+                    audio_rd_q   <= q_rd && sel_cpu;
                     audio_addr_q <= q_addr[15:0];
+                    ast          <= A_AUD;
+                end else if (is_bram) begin
+                    bram_sel     <= is_ram ? 2'd0 : 2'd1;
                     ast          <= A_BRAM;
                 end else if (is_ext) begin
                     ext_req   <= 1'b1;
@@ -398,8 +401,12 @@ module spg2xx (
                 end
             end
             A_BRAM: begin
+                complete((bram_sel == 2'd0) ? ram_q : vram_q);
+                ast <= A_IDLE;
+            end
+            A_AUD: if (spu_ack) begin
                 logic [15:0] v;
-                v = (bram_sel == 2'd0) ? ram_q : (bram_sel == 2'd1) ? vram_q : spu_rdata;
+                v = spu_rdata;
                 if (audio_rd_q && sim_io_override) v = sim_io_rdata;
                 complete(v);
                 ast <= A_IDLE;

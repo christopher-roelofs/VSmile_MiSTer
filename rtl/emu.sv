@@ -366,7 +366,10 @@ sdram sdram
 ///////////////////////////////////////////////////////////////////////
 // Console
 
-wire reset = RESET | status[0] | buttons[1] | ~pll_locked | ioctl_download;
+// registered: this net fans out to every flop in the design
+reg [1:0] rst_sync = 2'b11;
+always @(posedge clk_sys) rst_sync <= {rst_sync[0], RESET | status[0] | buttons[1] | ~pll_locked | ioctl_download};
+wire reset = rst_sync[1];
 
 // region code on port C (MAME vsmile REGION dip)
 reg [3:0] lang;

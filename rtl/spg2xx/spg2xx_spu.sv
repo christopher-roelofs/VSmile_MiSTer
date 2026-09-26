@@ -187,32 +187,45 @@ module spg2xx_spu (
     logic        pb_cwe, pb_pwe;
     logic [15:0] pb_wdata, pb_cq, pb_pq;
     logic [15:0] pa_cq, pa_pq, pa_xq;
-    assign idle  = es == E_IDLE && pend_start == 0 && pend_stop == 0 && pend_ramp == 0 && !ack;
-    wire  pa_go  = req && idle;
-    wire  pa_cwe = pa_go && we && addr[10:9] == 2'b00;
-    wire  pa_pwe = pa_go && we && addr[10:9] == 2'b01;
-    wire [15:0] pa_cwd = cpu_creg_value(addr[8:0], wdata);
-    wire [15:0] pa_pwd = cpu_preg_value(addr[8:0], wdata);
+    // CPU requests are staged one clk (s1_*) so the RAM ports and register
+    // logic see registered address/data; ack follows one clk after that
+    logic        s1_v, s1_we;
+    logic [10:0] s1_addr;
+    logic [15:0] s1_wdata;
+    assign idle  = es == E_IDLE && pend_start == 0 && pend_stop == 0 && pend_ramp == 0 && !s1_v && !ack;
+    wire  pa_go  = s1_v;
+    wire  pa_cwe = pa_go && s1_we && s1_addr[10:9] == 2'b00;
+    wire  pa_pwe = pa_go && s1_we && s1_addr[10:9] == 2'b01;
+    wire [15:0] pa_cwd = cpu_creg_value(s1_addr[8:0], s1_wdata);
+    wire [15:0] pa_pwd = cpu_preg_value(s1_addr[8:0], s1_wdata);
+
+    always_ff @(posedge clk) begin   // request stage
+        if (reset) s1_v <= 1'b0;
+        else begin
+            s1_v <= req && idle;
+            if (req && idle) begin s1_addr <= addr; s1_we <= we; s1_wdata <= wdata; end
+        end
+    end
 
     always_ff @(posedge clk) begin   // creg port A
-        if (pa_cwe) begin creg[addr[8:0]] <= pa_cwd; pa_cq <= pa_cwd; end
-        else        pa_cq <= creg[addr[8:0]];
+        if (pa_cwe) begin creg[s1_addr[8:0]] <= pa_cwd; pa_cq <= pa_cwd; end
+        else        pa_cq <= creg[s1_addr[8:0]];
     end
     always_ff @(posedge clk) begin   // creg port B
         if (pb_cwe) begin creg[pb_addr] <= pb_wdata; pb_cq <= pb_wdata; end
         else        pb_cq <= creg[pb_addr];
     end
     always_ff @(posedge clk) begin   // preg port A
-        if (pa_pwe) begin preg[addr[8:0]] <= pa_pwd; pa_pq <= pa_pwd; end
-        else        pa_pq <= preg[addr[8:0]];
+        if (pa_pwe) begin preg[s1_addr[8:0]] <= pa_pwd; pa_pq <= pa_pwd; end
+        else        pa_pq <= preg[s1_addr[8:0]];
     end
     always_ff @(posedge clk) begin   // preg port B
         if (pb_pwe) begin preg[pb_addr] <= pb_wdata; pb_pq <= pb_wdata; end
         else        pb_pq <= preg[pb_addr];
     end
     always_ff @(posedge clk) begin   // control registers >= 0x20
-        if (pa_go && we && addr[10] && addr[9:5] != 5'd0) xmisc[addr[9:0]] <= wdata;
-        pa_xq <= xmisc[addr[9:0]];
+        if (pa_go && s1_we && s1_addr[10] && s1_addr[9:5] != 5'd0) xmisc[s1_addr[9:0]] <= s1_wdata;
+        pa_xq <= xmisc[s1_addr[9:0]];
     end
 
     // MAME audio_w / audio_phase_w masks (only for channels 0-15: the
@@ -293,15 +306,15 @@ module spg2xx_spu (
                     tick_div <= tick_div + 9'd1;
             end
 
-            // ---------------- CPU register access ----------------
+            // ---------------- CPU register access (staged request) ----------------
             if (pa_go) begin
                 ack <= 1'b1;
-                ack_src <= addr[10] ? ((addr[9:5] == 0) ? 2'd2 : 2'd3) : {1'b0, addr[9]};
-                x_q <= x[addr[4:0]];
-                if (we) begin
-                    if (addr[10:9] == 2'b01 && !addr[8] && (addr[3:0] == P_PHASE_HIGH || addr[3:0] == P_PHASE))
-                        acc[addr[7:4]] <= 19'd0;      // MAME: m_channel_rate_accum = 0
-                    if (addr[10] && addr[9:5] == 5'd0) ctrl_write(addr[4:0], wdata);
+                ack_src <= s1_addr[10] ? ((s1_addr[9:5] == 0) ? 2'd2 : 2'd3) : {1'b0, s1_addr[9]};
+                x_q <= x[s1_addr[4:0]];
+                if (s1_we) begin
+                    if (s1_addr[10:9] == 2'b01 && !s1_addr[8] && (s1_addr[3:0] == P_PHASE_HIGH || s1_addr[3:0] == P_PHASE))
+                        acc[s1_addr[7:4]] <= 19'd0;   // MAME: m_channel_rate_accum = 0
+                    if (s1_addr[10] && s1_addr[9:5] == 5'd0) ctrl_write(s1_addr[4:0], s1_wdata);
                 end
             end
 
@@ -311,7 +324,7 @@ module spg2xx_spu (
                 if (pend_start != 0 || pend_stop != 0 || pend_ramp != 0) begin
                     ch <= 0;
                     es <= E_CMD;
-                end else if (tick_pending && !(req && !ack)) begin
+                end else if (tick_pending && !req && !s1_v) begin
                     tick_pending <= 1'b0;
                     es <= E_TICK;
                 end

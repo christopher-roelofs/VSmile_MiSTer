@@ -86,9 +86,10 @@ module unsp_core (
         S_RETI_PC,
         S_CALL_PC,
         S_CALL_SR,
-        S_MUL,
+        S_MUL, S_MUL2, S_MUL3,
         S_MULS_RD,    // muls: read [rd+i]
         S_MULS_RS,    // muls: read [rs+i]
+        S_MULS_M1, S_MULS_M2,
         S_MULS_WR,    // muls: FIR shift write-back
         S_MULS_END,
         S_INT_PC,
@@ -112,6 +113,10 @@ module unsp_core (
     logic [2:0]  cnt;       // push/pop remaining
     logic [2:0]  preg;      // push/pop current register
     logic [3:0]  int_line;
+
+    // multiplier pipeline (MUL and MULS)
+    logic [15:0] mul_a, mul_b;
+    logic [31:0] mul_p;
 
     // muls
     logic [4:0]  m_size, m_i;
@@ -611,11 +616,20 @@ module unsp_core (
             end
 
             // ----------------------------------------------------------
-            S_MUL: begin
+            S_MUL: begin    // MUL us / ss: operands, product, sign corrections
+                mul_a <= r[opa];
+                mul_b <= r[opb];
+                state <= S_MUL2;
+            end
+            S_MUL2: begin
+                mul_p <= mul_a * mul_b;
+                state <= S_MUL3;
+            end
+            S_MUL3: begin
                 logic [31:0] p;
-                p = r[opa] * r[opb];
-                if (r[opb][15]) p = p - {r[opa], 16'd0};
-                if (op1 == 3'd4 && r[opa][15]) p = p - {r[opb], 16'd0};
+                p = mul_p;
+                if (mul_b[15]) p = p - {mul_a, 16'd0};
+                if (op1 == 3'd4 && mul_a[15]) p = p - {mul_b, 16'd0};
                 r[R4] <= p[31:16];
                 r[R3] <= p[15:0];
                 finish(6'd12);
@@ -628,10 +642,19 @@ module unsp_core (
             end
 
             S_MULS_RS: if (ready) begin
+                mul_a <= m_cur;
+                mul_b <= rdata;
+                state <= S_MULS_M1;
+            end
+            S_MULS_M1: begin
+                mul_p <= mul_a * mul_b;
+                state <= S_MULS_M2;
+            end
+            S_MULS_M2: begin
                 logic [31:0] t;
-                t = m_cur * rdata;
-                if (m_cur[15]) t = t - {rdata, 16'd0};
-                if (rdata[15]) t = t - {m_cur, 16'd0};
+                t = mul_p;
+                if (mul_a[15]) t = t - {mul_b, 16'd0};
+                if (mul_b[15]) t = t - {mul_a, 16'd0};
                 m_acc <= m_acc + 48'($signed(t));
                 if (m_i + 5'd1 == m_size) begin
                     sb <= 4'd0;
