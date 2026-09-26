@@ -157,7 +157,7 @@ module spg2xx (
     // ------------------------------------------------------------------
     // PPU
     // ------------------------------------------------------------------
-    logic        ppu_mem_req, ppu_mem_ack, ppu_mem_group;
+    logic        ppu_mem_req, ppu_mem_ack, ppu_mem_group, ppu_mem_more;
     logic [21:0] ppu_mem_addr;
     logic [15:0] ppu_mem_rdata;
     logic [63:0] ppu_mem_rdata64;
@@ -167,7 +167,7 @@ module spg2xx (
     spg2xx_ppu ppu (
         .clk, .reset, .clk_vid,
         .regs(vregs), .line_start, .line_vpos(vpos), .last_line,
-        .mem_req(ppu_mem_req), .mem_group(ppu_mem_group), .mem_addr(ppu_mem_addr), .mem_ack(ppu_mem_ack),
+        .mem_req(ppu_mem_req), .mem_group(ppu_mem_group), .mem_more(ppu_mem_more), .mem_addr(ppu_mem_addr), .mem_ack(ppu_mem_ack),
         .mem_rdata(ppu_mem_rdata), .mem_rdata64(ppu_mem_rdata64),
         .vram_addr(ppu_vram_addr), .vram_q(ppu_vram_q),
         .out_x, .out_rgb, .out_rgb888,
@@ -497,7 +497,11 @@ module spg2xx (
                     rl_valid[rl_fill] <= 1'b1;
                     rl_tag[rl_fill]   <= ext_addr[21:2];
                     rl_data[rl_fill]  <= ext_rdata;
-                    pf_pending        <= 1'b1;
+                    // read ahead only where the next group will be used:
+                    // CPU/DMA streams, and PPU rows longer than this group
+                    // (an SPU sample or a one-group tile row would only
+                    // evict a live line and hold the bus)
+                    pf_pending        <= (owner == 2'd0) || (owner == 2'd1) || (owner == 2'd3 && ppu_mem_more);
                     pf_tag            <= ext_addr[21:2] + 20'd1;
                 end
                 ast <= A_IDLE;

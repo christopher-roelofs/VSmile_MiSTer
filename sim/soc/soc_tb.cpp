@@ -17,6 +17,8 @@
 //   BIOS=path   system ROM (otherwise reads as 0xFFFF, like the traces)
 //   VERBOSE=1   print every retired instruction
 //   WAV=path    write the SPU output (stereo 16-bit, 70312 Hz) as a WAV file
+//   PRESS=f:m,... hold buttons mask m (1 ok, 2 quit, 4 help, 8 abc) for
+//               eight frames from frame f (free-run only)
 //   DUMP=dir    write every FRAMES-th frame (default 60) as dir/rtl_NNNN.ppm
 //               and, when it differs, dir/ref_NNNN.ppm from the reference
 //
@@ -183,10 +185,9 @@ int main(int argc, char** argv) {
     while (cart_words < cart.size()) cart_words <<= 1;
     cart.resize(cart_words, 0xffff);
     std::vector<uint16_t> bios;
-    // the system ROM dump is big-endian words (MAME loads it ROM_REVERSE)
+    // the system ROM is loaded like the cart (low byte first)
     if (getenv("BIOS")) {
         bios = load_words(getenv("BIOS"));
-        for (auto& w : bios) w = (uint16_t)((w >> 8) | (w << 8));
     }
 
     TraceReader trace(dir + "/cpu.tr");
@@ -226,6 +227,18 @@ int main(int argc, char** argv) {
     top->joy = 0;
     top->colors = 0;
     top->buttons = 0;
+    std::vector<std::pair<uint32_t, int>> presses;
+    if (getenv("PRESS")) {
+        std::string ps = getenv("PRESS");
+        size_t i = 0;
+        while (i < ps.size()) {
+            size_t c = ps.find(',', i); if (c == std::string::npos) c = ps.size();
+            std::string t = ps.substr(i, c - i);
+            size_t k = t.find(':');
+            if (k != std::string::npos) presses.push_back({(uint32_t)atoi(t.substr(0, k).c_str()), atoi(t.substr(k + 1).c_str())});
+            i = c + 1;
+        }
+    }
     top->sim_io_override = freerun ? 0 : 1;
     top->sim_irq_override = freerun ? 0 : 1;
     top->sim_irq = 0;
@@ -497,6 +510,11 @@ int main(int argc, char** argv) {
                     if (frame_bad_lines) write_ppm("ref", ref_frame);
                 }
                 frame++;
+                {
+                    int m = 0;
+                    for (auto& pr : presses) if (frame >= pr.first && frame < pr.first + 8) m |= pr.second;
+                    top->buttons = m;
+                }
                 frame_bad_lines = frame_bad_px = 0;
             }
         }
@@ -533,7 +551,9 @@ int main(int argc, char** argv) {
                            && top->dbg_r[1] == cur.r[0] && top->dbg_r[2] == cur.r[1]
                            && top->dbg_r[3] == cur.r[2] && top->dbg_r[4] == cur.r[3]
                            && top->dbg_r[0] == cur.r[4] && top->dbg_r[5] == cur.r[5]
-                           && top->dbg_r[6] == cur.r[6];
+                           // SR is sampled after the fetch's add_lpc(1); MAME's is
+                           // before it, so CS is taken from the fetch address
+                           && ((top->dbg_r[6] & 0xffc0) | (top->dbg_pc >> 16)) == cur.r[6];
                     if (!ok) diverge("register/PC state differs");
                     if (cur.irq_after >= 0) {
                         irq_mame[cur.irq_after]++;

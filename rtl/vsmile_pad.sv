@@ -36,7 +36,9 @@ module vsmile_pad (
     output logic       tx_valid,        // byte to the console UART
     output logic [7:0] tx_data,
     output logic       rts,
-    output logic       rts_evt          // rts_out() was called this clk
+    output logic       rts_evt,         // rts_out() was called this clk
+    output logic [63:0] dbg,            // state snapshot for the OSD debug screen
+    output logic [6:0]  dbg_stale
 );
 
     localparam int unsigned TX_PERIOD   = 27_000_000 / 960;  // 28125
@@ -137,6 +139,10 @@ module vsmile_pad (
         end
         push(7, 8'h55);
     endtask
+
+    assign dbg_stale = stale;
+    assign dbg = {idle_t[24:9], rts_t[24:9], tx_t[24:9],
+                  active, sel, empty, tx_active, rts, 1'b0, head[4:0], tail[4:0]};
 
     always_ff @(posedge clk) begin
         if (reset) rx_seen <= 1'b0;

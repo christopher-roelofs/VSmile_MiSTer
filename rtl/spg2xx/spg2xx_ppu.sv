@@ -35,6 +35,7 @@ module spg2xx_ppu (
     // aligned four words containing mem_addr, word 0 in mem_rdata64[15:0]
     output logic        mem_req,
     output logic        mem_group,
+    output logic        mem_more,       // the row continues in the next group
     output logic [21:0] mem_addr,
     input  logic        mem_ack,
     input  logic [15:0] mem_rdata,
@@ -375,6 +376,7 @@ module spg2xx_ppu (
             R_TILE_ISSUE: begin
                 mem_req   <= 1'b1;
                 mem_group <= 1'b0;
+                mem_more  <= 1'b0;
                 mem_addr  <= pg_ctrl[2] ? {6'd0, pg_tilemap} : {6'd0, pg_tilemap + tile_address};
                 rs <= R_TILE_RD;
             end
@@ -391,6 +393,8 @@ module spg2xx_ppu (
                     // attributes come from the extended attribute map
                     mem_req   <= 1'b1;
                     mem_group <= 1'b0;
+                    mem_more  <= 1'b0;
+                mem_more  <= 1'b0;
                     mem_addr  <= pg_ctrl[2] ? {6'd0, pg_exattr} : {6'd0, pg_exattr + (tile_address >> 1)};
                     rs <= R_EX_RD;
                 end else
@@ -502,6 +506,7 @@ module spg2xx_ppu (
                 row_addr  <= a;
                 mem_addr  <= a;
                 mem_group <= (a >= 22'h004000);
+                mem_more  <= (6'd4 - 6'(a[1:0])) < rb_n;
                 mem_req   <= 1'b1;
                 rs        <= R_FETCH;
             end
@@ -536,6 +541,7 @@ module spg2xx_ppu (
                     rb_i      <= rb_i + got;
                     mem_addr  <= nxt;
                     mem_group <= (nxt >= 22'h004000);
+                    mem_more  <= (rb_i + got + 6'd4) < rb_n;
                 end
             end
 

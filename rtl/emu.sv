@@ -121,10 +121,11 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 ///////////////////////////////////////////////////////////////////////
 // SDRAM: cartridge and system ROM
 //
-// Downloads arrive as bytes and pairs are written as one word.  Cartridge
-// dumps are little-endian words; the system ROM dump (MAME vsmile_v103.bin
-// etc.) is big-endian, MAME loads it with ROM_REVERSE, so it is swapped.
-// BIOS is index 0 (boot.rom auto-load) or 2 (OSD), cartridges index 1.
+// Downloads arrive as bytes and pairs are written as one word, low byte
+// first, for both the cartridge and the system ROM (MAME's ROM_REVERSE on
+// the sysrom cancels against the CPU's big-endian region: the CPU sees the
+// dump's bytes low first, as verified against a trace that reads it).
+// BIOS is index 0 (boot0.rom auto-load) or 2 (OSD), cartridges index 1.
 
 wire        dl_is_bios = (ioctl_index == 0) || (ioctl_index == 2);
 reg  [7:0]  dl_lo;
@@ -141,7 +142,7 @@ always @(posedge clk_sys) begin
         if (!ioctl_addr[0]) dl_lo <= ioctl_dout;
         else begin
             dl_waddr   <= {dl_is_bios, ioctl_addr[23:1]};
-            dl_wdata   <= dl_is_bios ? {dl_lo, ioctl_dout} : {ioctl_dout, dl_lo};
+            dl_wdata   <= {ioctl_dout, dl_lo};    // BIOS and cart: low byte first
             dl_req     <= 1;
             ioctl_wait <= 1;
         end
@@ -266,6 +267,10 @@ wire signed [15:0] audio_l, audio_r;
 wire        audio_strobe;
 wire        ppu_ovr;
 wire        dbg_fetch, dbg_illegal, dbg_irq_ack, dbg_io_wr;
+wire [63:0] dbg_pad;
+wire        dbg_utx_v, dbg_urx_v, dbg_pad_sel;
+wire [7:0]  dbg_utx_d, dbg_urx_d;
+wire [6:0]  dbg_pad_stale;
 wire [21:0] dbg_pc;
 wire [15:0] dbg_io_addr, dbg_io_wdata;
 
@@ -310,7 +315,9 @@ vsmile console
     .sim_irq_override(1'b0),
     .sim_irq    (9'd0),
     .dbg_io_rd(), .dbg_io_wr(dbg_io_wr), .dbg_io_addr(dbg_io_addr), .dbg_io_wdata(dbg_io_wdata), .dbg_io_rtl_rdata(), .soc_irq(),
-    .dbg_fetch(dbg_fetch), .dbg_pc(dbg_pc), .dbg_op(), .dbg_r(), .dbg_illegal(dbg_illegal), .dbg_irq_ack(dbg_irq_ack), .dbg_irq_ack_line()
+    .dbg_fetch(dbg_fetch), .dbg_pc(dbg_pc), .dbg_op(), .dbg_r(), .dbg_illegal(dbg_illegal), .dbg_irq_ack(dbg_irq_ack), .dbg_irq_ack_line(),
+    .dbg_pad(dbg_pad), .dbg_uart_tx_v(dbg_utx_v), .dbg_uart_tx_d(dbg_utx_d),
+    .dbg_uart_rx_v(dbg_urx_v), .dbg_uart_rx_d(dbg_urx_d), .dbg_pad_sel(dbg_pad_sel), .dbg_pad_stale(dbg_pad_stale)
 );
 
 // LED: download, or (diagnostic) the renderer missed a line deadline in the
@@ -336,8 +343,11 @@ wire        hs, vs, hblank, vblank;
 //     and two clks later (s2).
 //   Console: row 0 {PC, instructions}, 1 {IRQ acks, illegal ops, SDRAM
 //     reads}, 2 {frames, PPU overruns, I/O writes}, 3 PC[15:0] at the last
-//     four frame starts, 4-15 last values written to 0x2810-0x283F (four per
-//     row, lowest address in bits 15:0).
+//     four frame starts, 4-11 last values written to 0x2810-0x282F (four per
+//     row, lowest address in bits 15:0), 12 pad state (vsmile_pad dbg),
+//     13 {bytes pad->console, bytes console->pad, select changes, {select,
+//     stale}}, 14 last eight bytes pad->console (newest in bits 7:0), 15
+//     last eight bytes console->pad.
 reg  [23:0] dbg_addr [0:3];
 reg  [63:0] dbg_s0 [0:3], dbg_s1 [0:3], dbg_s2 [0:3];
 reg  [2:0]  dbg_n;          // reads issued since reset (saturates at 4)
@@ -364,7 +374,7 @@ end
 reg  [31:0] st_insn, st_reads, st_iow;
 reg  [15:0] st_irq, st_ill, st_frames, st_ovr;
 reg  [63:0] st_pcs;
-reg  [15:0] st_vr [0:47];
+reg  [15:0] st_vr [0:31];
 reg  [8:0]  st_vpos_q;
 always @(posedge clk_sys) begin
     st_vpos_q <= vpos;
@@ -383,8 +393,22 @@ always @(posedge clk_sys) begin
             st_pcs    <= {st_pcs[47:0], dbg_pc[15:0]};
         end
     end
-    if (dbg_io_wr && dbg_io_addr >= 16'h2810 && dbg_io_addr < 16'h2840)
-        st_vr[6'(dbg_io_addr - 16'h2810)] <= dbg_io_wdata;
+    if (dbg_io_wr && dbg_io_addr >= 16'h2810 && dbg_io_addr < 16'h2830)
+        st_vr[5'(dbg_io_addr - 16'h2810)] <= dbg_io_wdata;
+end
+
+reg [15:0] st_ptx, st_prx, st_psel;
+reg [63:0] st_txh, st_rxh;
+reg        st_sel_q;
+always @(posedge clk_sys) begin
+    st_sel_q <= dbg_pad_sel;
+    if (reset) begin
+        st_ptx <= 0; st_prx <= 0; st_psel <= 0; st_txh <= 0; st_rxh <= 0;
+    end else begin
+        if (dbg_urx_v) begin st_ptx <= st_ptx + 1'd1; st_txh <= {st_txh[55:0], dbg_urx_d}; end
+        if (dbg_utx_v) begin st_prx <= st_prx + 1'd1; st_rxh <= {st_rxh[55:0], dbg_utx_d}; end
+        if (dbg_pad_sel != st_sel_q) st_psel <= st_psel + 1'd1;
+    end
 end
 
 // the row being shown, copied into the video domain once per row (static
@@ -398,6 +422,10 @@ always @(posedge clk_sys) begin
         4'd1: dbg_row_sys <= {st_irq, st_ill, st_reads};
         4'd2: dbg_row_sys <= {st_frames, st_ovr, st_iow};
         4'd3: dbg_row_sys <= st_pcs;
+        4'd12: dbg_row_sys <= dbg_pad;
+        4'd13: dbg_row_sys <= {st_ptx, st_prx, st_psel, 8'd0, dbg_pad_sel, dbg_pad_stale};
+        4'd14: dbg_row_sys <= st_txh;
+        4'd15: dbg_row_sys <= st_rxh;
         default: dbg_row_sys <= {st_vr[{dbg_row_s - 4'd4, 2'd3}], st_vr[{dbg_row_s - 4'd4, 2'd2}],
                                  st_vr[{dbg_row_s - 4'd4, 2'd1}], st_vr[{dbg_row_s - 4'd4, 2'd0}]};
     endcase

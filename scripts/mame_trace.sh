@@ -59,7 +59,7 @@ EOF
 
 cd "$out"
 timeout -s KILL "${TRACE_TIMEOUT:-300}" env SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy \
-"${MAME:-mame}" vsmile -rompath "$rompath" -cart "$cart" \
+"${MAME:-mame}" vsmile -rompath "$rompath" -cart "$cart" ${MAME_BIOS:+-bios "$MAME_BIOS"} \
     -video none -sound none -nothrottle -window -noreadconfig -skip_gameinfo \
     -seconds_to_run "$secs" \
     -debug -debugger none -autoboot_script "$out/trace.lua" \

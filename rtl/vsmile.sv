@@ -68,6 +68,13 @@ module vsmile (
     output logic [15:0] dbg_r [0:7],
     output logic        dbg_illegal,
     output logic        dbg_irq_ack,
+    output logic [63:0] dbg_pad,        // vsmile_pad state snapshot
+    output logic        dbg_uart_tx_v,  // console -> pad byte
+    output logic [7:0]  dbg_uart_tx_d,
+    output logic        dbg_uart_rx_v,  // pad -> console byte
+    output logic [7:0]  dbg_uart_rx_d,
+    output logic        dbg_pad_sel,
+    output logic [6:0]  dbg_pad_stale,
     output logic [3:0]  dbg_irq_ack_line
 );
 
@@ -82,13 +89,17 @@ module vsmile (
     logic [7:0]  uart_tx_data /* verilator public_flat_rd */, uart_rx_data /* verilator public_flat_rd */;
     logic [1:0]  ctrl_rts, ctrl_rts_evt, ctrl_select /* verilator public_flat_rd */;
 
+    assign dbg_uart_tx_v = uart_tx_valid; assign dbg_uart_tx_d = uart_tx_data;
+    assign dbg_uart_rx_v = uart_rx_valid; assign dbg_uart_rx_d = uart_rx_data;
+    assign dbg_pad_sel   = ctrl_select[0];
+
     // MAME vsmile_state::uart_rx sends console bytes to both ports; port 2
     // has no device (RTS low)
     vsmile_pad pad1 (
         .clk, .reset, .ce, .joy, .colors, .buttons,
         .select(ctrl_select[0]),
         .rx_valid(uart_tx_valid), .rx_data(uart_tx_data),
-        .tx_valid(uart_rx_valid), .tx_data(uart_rx_data),
+        .tx_valid(uart_rx_valid), .tx_data(uart_rx_data), .dbg(dbg_pad), .dbg_stale(dbg_pad_stale),
         .rts(ctrl_rts[0]), .rts_evt(ctrl_rts_evt[0])
     );
     assign ctrl_rts[1]     = 1'b0;
