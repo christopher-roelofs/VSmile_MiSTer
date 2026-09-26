@@ -345,18 +345,23 @@ module spg2xx (
     assign dbg_io_rtl_rdata = (ast == A_AUD) ? spu_rdata : reg_rdata;
 
     // ext bus: address/data latched when the access is accepted (another
-    // requester may be selected while it is in flight).  A four-line cache
-    // holds groups of four words: consecutive reads (pixel rows, code,
-    // samples) are served from it in one clk, and after a CPU/DMA miss (or
-    // a PPU row longer than the group) the following group is prefetched
-    // while the bus is otherwise idle.  Lines are per requester, lines 0-1
-    // CPU and DMA, 2 PPU, 3 SPU: with shared lines the renderer and the
-    // CPU evicted each other on every access during active display and the
-    // SDRAM saturated (one read per instruction, lines abandoned).
-    logic        rl_valid [0:3];
-    logic [19:0] rl_tag [0:3];          // addr[21:2]
-    logic [63:0] rl_data [0:3];
-    logic [1:0]  rl_fill;               // line the current fetch goes to
+    // requester may be selected while it is in flight).  An eight-line
+    // cache holds groups of four words: consecutive reads (pixel rows,
+    // code, samples) are served from it in one clk, and after a CPU/DMA
+    // miss (or a PPU row longer than the group) the following group is
+    // prefetched while the bus is otherwise idle.  Lines belong to a
+    // requester (CPU 0-3, DMA 4, PPU 5-6, SPU 7), least recently used
+    // replaced within the set: with shared lines the renderer and the CPU
+    // evicted each other on every access, and with two CPU lines its code
+    // and data streams did (one SDRAM read per instruction on the board).
+    localparam int NL = 8;
+    logic        rl_valid [0:NL-1];
+    logic [19:0] rl_tag [0:NL-1];       // addr[21:2]
+    logic [63:0] rl_data [0:NL-1];
+    logic [7:0]  rl_use [0:NL-1];       // use_ctr at the last hit/fill
+    logic [7:0]  use_ctr;
+    logic [2:0]  rl_fill;               // line the current fetch goes to
+    logic [2:0]  hit_line_r;
     logic [1:0]  pf_owner;              // requester the prefetch is for
     logic [1:0]  ext_sel;               // word of the group wanted
     logic        pf_pending, pf_active;   // prefetch wanted / in flight on the ext bus
@@ -372,20 +377,39 @@ module spg2xx (
 
     // a requester only sees its own lines
     function automatic logic line_of(input int i, input logic [1:0] o);
-        return (o == 2'd3) ? (i == 2) : (o == 2'd2) ? (i == 3) : (i < 2);
+        case (o)
+            2'd0:    return i < 4;              // CPU
+            2'd1:    return i == 4;             // DMA
+            2'd3:    return i == 5 || i == 6;   // PPU
+            default: return i == 7;             // SPU
+        endcase
     endfunction
-    // line a fetch for requester o of group t goes to: the CPU keeps the
-    // line holding the previous group (the prefetch pair)
-    function automatic logic [1:0] fill_line(input logic [1:0] o, input logic [19:0] t);
-        if (o == 2'd3) return 2'd2;
-        if (o == 2'd2) return 2'd3;
-        return (rl_valid[0] && rl_tag[0] == t - 20'd1) ? 2'd1 : 2'd0;
+    // line a fetch for requester o goes to: an invalid one, else the least
+    // recently used of its set
+    function automatic logic [2:0] fill_line(input logic [1:0] o);
+        logic [2:0] v;
+        logic [7:0] age, best;
+        logic found;
+        v = 3'd0; best = 8'd0; found = 1'b0;
+        for (int i = 0; i < NL; i++) if (line_of(i, o)) begin
+            age = use_ctr - rl_use[i];
+            if (!rl_valid[i]) age = 8'hff;
+            if (!found || age > best) begin v = 3'(i); best = age; found = 1'b1; end
+        end
+        return v;
     endfunction
-    logic [3:0]  hitv;
-    always_comb for (int i = 0; i < 4; i++)
-        hitv[i] = rl_valid[i] && (xq_addr[21:2] == rl_tag[i]) && line_of(i, owner);
+    logic [NL-1:0] hitv;
+    logic [2:0]    hit_line;
+    logic [63:0]   rl_hit_data;
+    always_comb begin
+        hit_line = 3'd0;
+        rl_hit_data = rl_data[0];
+        for (int i = 0; i < NL; i++) begin
+            hitv[i] = rl_valid[i] && (xq_addr[21:2] == rl_tag[i]) && line_of(i, owner);
+            if (hitv[i]) begin hit_line = 3'(i); rl_hit_data = rl_data[i]; end
+        end
+    end
     wire         rl_hit = |hitv;
-    wire [63:0]  rl_hit_data = hitv[0] ? rl_data[0] : hitv[1] ? rl_data[1] : hitv[2] ? rl_data[2] : rl_data[3];
     logic        hit_r;
     logic [63:0] hit_data_r;
     logic        dma_ack;
@@ -405,6 +429,8 @@ module spg2xx (
             cpu_done <= 1'b0;
             ext_req  <= 1'b0;
             rl_valid    <= '{default: 1'b0};
+            rl_use      <= '{default: 8'd0};
+            use_ctr     <= 8'd0;
             pf_pending  <= 1'b0;
             pf_active   <= 1'b0;
             dma_wait <= 1'b0;
@@ -486,12 +512,15 @@ module spg2xx (
                 // bringing this very group)
                 hit_r      <= !xq_wr && rl_hit;
                 hit_data_r <= rl_hit_data;
+                hit_line_r <= hit_line;
                 ast        <= A_CHK2;
             end
             A_CHK2: begin
                 if (hit_r) begin
                     complete(hit_data_r[ext_sel * 16 +: 16]);
                     ppu_mem_rdata64 <= hit_data_r;
+                    rl_use[hit_line_r] <= use_ctr;
+                    use_ctr <= use_ctr + 8'd1;
                     ast <= A_IDLE;
                 end else if (pf_active) begin
                     ast <= A_CHK;           // re-check once the prefetch lands
@@ -501,7 +530,7 @@ module spg2xx (
                     ext_addr  <= xq_addr;
                     ext_wdata <= xq_wdata;
                     // replace the line that does not hold the previous group
-                    rl_fill <= fill_line(owner, xq_addr[21:2]);
+                    rl_fill <= fill_line(owner);
                     ast     <= A_EXT;
                 end
             end
@@ -513,6 +542,8 @@ module spg2xx (
                     rl_valid[rl_fill] <= 1'b1;
                     rl_tag[rl_fill]   <= ext_addr[21:2];
                     rl_data[rl_fill]  <= ext_rdata;
+                    rl_use[rl_fill]   <= use_ctr;
+                    use_ctr           <= use_ctr + 8'd1;
                     // read ahead only where the next group will be used:
                     // CPU/DMA streams, and PPU rows longer than this group
                     // (an SPU sample or a one-group tile row would only
@@ -535,6 +566,8 @@ module spg2xx (
                     rl_valid[rl_fill] <= 1'b1;
                     rl_tag[rl_fill]   <= ext_addr[21:2];
                     rl_data[rl_fill]  <= ext_rdata;
+                    rl_use[rl_fill]   <= use_ctr;
+                    use_ctr           <= use_ctr + 8'd1;
                 end
             end else if (pf_pending && ast == A_IDLE && !(go && is_ext) && !ext_req) begin
                 pf_pending <= 1'b0;
@@ -542,7 +575,7 @@ module spg2xx (
                 ext_req    <= 1'b1;
                 ext_wr     <= 1'b0;
                 ext_addr   <= {pf_tag, 2'b00};
-                rl_fill    <= fill_line(pf_owner, pf_tag);
+                rl_fill    <= fill_line(pf_owner);
             end
 
             // DMA sequencing
