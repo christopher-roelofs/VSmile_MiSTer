@@ -134,7 +134,7 @@ module spg2xx_spu (
     // ------------------------------------------------------------------
     typedef enum logic [4:0] {
         E_IDLE, E_CMD, E_CMD_LOAD, E_CMD_APPLY,
-        E_TICK, E_CH, E_LOAD, E_ADV, E_FETCH, E_RD_HDR, E_RD_RAW, E_FETCH2,
+        E_TICK, E_CH, E_LOAD, E_ADV, E_FETCH, E_RD_HDR, E_RD_RAW, E_FETCH2, E_DEC1, E_DEC2,
         E_MIX1, E_MIX1B, E_MIX2, E_MIX3, E_MIX3B, E_ENV, E_ENV_RD, E_WB, E_OUT, E_OUT2
     } estate_t;
     estate_t es;
@@ -143,6 +143,16 @@ module spg2xx_spu (
     logic [4:0]  li;                      // load index
     logic [2:0]  wi;                      // write-back index
     logic        load_cmd;                // E_LOAD returns to E_CMD_APPLY
+    // ADPCM decode pipeline (E_DEC1 latches the channel state, E_DEC2 computes)
+    logic [3:0]  nib_r;
+    logic        dec_a36;
+    logic [14:0] sv_r;
+    logic signed [16:0] sig_r;
+    logic [6:0]  step_r;
+    logic signed [15:0] prev36_r;
+    logic [15:0] hdr36_r;
+    estate_t     dec_next;
+
     logic signed [31:0] ms;               // mixer pipeline sample
     logic signed [31:0] mp, mq;           // mixer partial products
     logic signed [31:0] pan_l, pan_r;
@@ -409,21 +419,19 @@ module spg2xx_spu (
                 es  <= E_FETCH2;
             end
             E_FETCH2: begin  // MAME fetch_sample, part 2 + address advance
-                logic stop_now, do_loop, clr_adpcm, advance_addr;
+                logic stop_now, do_loop, clr_adpcm, advance_addr, dec_pending;
                 logic [15:0] v;
-                stop_now = 1'b0; do_loop = 1'b0; clr_adpcm = 1'b0; advance_addr = 1'b0;
+                stop_now = 1'b0; do_loop = 1'b0; clr_adpcm = 1'b0; advance_addr = 1'b0; dec_pending = 1'b0;
                 if (w_adpcm || w_a36) begin
                     if (w_tone != 0 && raw == 16'hffff) begin
                         if (w_tone == 2'd1) stop_now = 1'b1;
                         else begin do_loop = 1'b1; clr_adpcm = 1'b1; end
                     end else begin
-                        logic [3:0]  nib;
-                        logic [15:0] dec;
-                        v   = raw >> shift[ch];
-                        nib = v[3:0];
-                        if (w_a36) adpcm36(ch, nib, dec);
-                        else       ima(ch, nib, dec);
-                        w[C_WDATA] <= dec;
+                        // decoded in E_DEC1/E_DEC2 after the address advance
+                        v = raw >> shift[ch];
+                        nib_r   <= v[3:0];
+                        dec_a36 <= w_a36;
+                        dec_pending = 1'b1;
                     end
                 end else if (w_16bit) begin
                     if (w_tone != 0 && raw == 16'hffff) begin
@@ -472,12 +480,29 @@ module spg2xx_spu (
                     m[5:0] = a[21:16];
                     w[C_MODE]      <= m;
                     w[C_WAVE_ADDR] <= a[15:0];
-                    if (nfetch == 3'd1) es <= E_MIX1;
-                    else begin
-                        nfetch <= nfetch - 3'd1;
-                        es <= E_FETCH;
-                    end
+                    if (nfetch != 3'd1) nfetch <= nfetch - 3'd1;
+                    if (dec_pending) begin
+                        dec_next <= (nfetch == 3'd1) ? E_MIX1 : E_FETCH;
+                        es <= E_DEC1;
+                    end else
+                        es <= (nfetch == 3'd1) ? E_MIX1 : E_FETCH;
                 end
+            end
+
+            E_DEC1: begin   // latch the channel's decoder state
+                sv_r     <= ima_step(ad_step[ch]);
+                sig_r    <= ad_sig[ch];
+                step_r   <= ad_step[ch];
+                prev36_r <= a36_prev[ch];
+                hdr36_r  <= a36_hdr[ch];
+                es <= E_DEC2;
+            end
+            E_DEC2: begin
+                logic [15:0] dec;
+                if (dec_a36) adpcm36(nib_r, dec);
+                else         ima(nib_r, dec);
+                w[C_WDATA] <= dec;
+                es <= dec_next;
             end
 
             // MAME sound_stream_update, per channel, in three stages
@@ -679,39 +704,38 @@ module spg2xx_spu (
         end
     endtask
 
-    // MAME ima_adpcm_state::clock; `o` is the sample ^ 0x8000
-    task automatic ima(input logic [3:0] c, input logic [3:0] nib, output logic [15:0] o);
-        logic [14:0] sv;
+    // MAME ima_adpcm_state::clock on the state latched in E_DEC1; `o` is
+    // the sample ^ 0x8000
+    task automatic ima(input logic [3:0] nib, output logic [15:0] o);
         logic signed [17:0] d, s;
         logic signed [7:0] st;
-        sv = ima_step(ad_step[c]);
-        d  = 18'(sv >> 3);
-        if (nib[2]) d = d + 18'(sv);
-        if (nib[1]) d = d + 18'(sv >> 1);
-        if (nib[0]) d = d + 18'(sv >> 2);
+        d  = 18'(sv_r >> 3);
+        if (nib[2]) d = d + 18'(sv_r);
+        if (nib[1]) d = d + 18'(sv_r >> 1);
+        if (nib[0]) d = d + 18'(sv_r >> 2);
         if (nib[3]) d = -d;
-        s = 18'(ad_sig[c]) + d;
+        s = 18'(sig_r) + d;
         if (s > 18'sd32767)       s = 18'sd32767;
         else if (s < -18'sd32768) s = -18'sd32768;
-        ad_sig[c] <= 17'(s);
-        st = 8'(ad_step[c]) + (nib[2] ? (nib[1:0] == 2'd0 ? 8'sd2 : nib[1:0] == 2'd1 ? 8'sd4 : nib[1:0] == 2'd2 ? 8'sd6 : 8'sd8) : -8'sd1);
+        ad_sig[ch] <= 17'(s);
+        st = 8'(step_r) + (nib[2] ? (nib[1:0] == 2'd0 ? 8'sd2 : nib[1:0] == 2'd1 ? 8'sd4 : nib[1:0] == 2'd2 ? 8'sd6 : 8'sd8) : -8'sd1);
         if (st > 8'sd88)     st = 8'sd88;
         else if (st < 8'sd0) st = 8'sd0;
-        ad_step[c] <= st[6:0];
+        ad_step[ch] <= st[6:0];
         o = s[15:0] ^ 16'h8000;
     endtask
 
-    // MAME decode_adpcm36_nybble
-    task automatic adpcm36(input logic [3:0] c, input logic [3:0] nib, output logic [15:0] o);
+    // MAME decode_adpcm36_nybble on the state latched in E_DEC1
+    task automatic adpcm36(input logic [3:0] nib, output logic [15:0] o);
         logic [3:0]  sh;
         logic signed [15:0] f0, sd;
         logic signed [31:0] acc36;
-        sh = a36_hdr[c][3:0];
-        f0 = 16'(signed'(a36_hdr[c][9:4]));
+        sh = hdr36_r[3:0];
+        f0 = 16'(signed'(hdr36_r[9:4]));
         sd = signed'({nib, 12'd0});
-        acc36 = (32'(signed'(a36_prev[c])) * 32'(f0) + 32'sd32) >>> 12;
+        acc36 = (32'(signed'(prev36_r)) * 32'(f0) + 32'sd32) >>> 12;
         sd = 16'((32'(sd) >>> sh) + acc36);
-        a36_prev[c] <= sd;
+        a36_prev[ch] <= sd;
         o = sd ^ 16'h8000;
     endtask
 
