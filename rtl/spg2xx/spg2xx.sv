@@ -359,8 +359,8 @@ module spg2xx (
     logic        rl_valid [0:NL-1];
     logic [19:0] rl_tag [0:NL-1];       // addr[21:2]
     logic [63:0] rl_data [0:NL-1];
-    logic [7:0]  rl_use [0:NL-1];       // use_ctr at the last hit/fill
-    logic [7:0]  use_ctr;
+    logic [2:0]  plru_cpu;              // tree pseudo-LRU over lines 0-3
+    logic        plru_ppu;              // the older of lines 5/6
     logic [2:0]  hit_line_r;
     logic [1:0]  pf_owner;              // requester the prefetch is for
     logic [1:0]  ext_sel;               // word of the group wanted
@@ -400,21 +400,29 @@ module spg2xx (
             default: return i == 7;             // SPU
         endcase
     endfunction
-    // line a fetch for requester o goes to: an invalid one, else the least
-    // recently used of its set (a line with a fetch in flight was marked
-    // used when it was issued, so it is not chosen again)
+    // line a fetch for requester o goes to: the pseudo-least-recently-used
+    // one of its set (a line is touched when a fetch for it is issued, so a
+    // second fetch in flight takes another one)
     function automatic logic [2:0] fill_line(input logic [1:0] o);
-        logic [2:0] v;
-        logic [7:0] age, best;
-        logic found;
-        v = 3'd0; best = 8'd0; found = 1'b0;
-        for (int i = 0; i < NL; i++) if (line_of(i, o)) begin
-            age = use_ctr - rl_use[i];
-            if (!rl_valid[i]) age = 8'hff;
-            if (!found || age > best) begin v = 3'(i); best = age; found = 1'b1; end
-        end
-        return v;
+        case (o)
+            2'd0:    return plru_cpu[0] ? (plru_cpu[2] ? 3'd3 : 3'd2) : (plru_cpu[1] ? 3'd1 : 3'd0);
+            2'd1:    return 3'd4;
+            2'd3:    return plru_ppu ? 3'd6 : 3'd5;
+            default: return 3'd7;
+        endcase
     endfunction
+    // mark line i most recently used: the tree bits point away from it
+    task automatic touch(input logic [2:0] i);
+        case (i)
+            3'd0: begin plru_cpu[0] <= 1'b1; plru_cpu[1] <= 1'b1; end
+            3'd1: begin plru_cpu[0] <= 1'b1; plru_cpu[1] <= 1'b0; end
+            3'd2: begin plru_cpu[0] <= 1'b0; plru_cpu[2] <= 1'b1; end
+            3'd3: begin plru_cpu[0] <= 1'b0; plru_cpu[2] <= 1'b0; end
+            3'd5: plru_ppu <= 1'b1;
+            3'd6: plru_ppu <= 1'b0;
+            default: ;
+        endcase
+    endtask
     logic [NL-1:0] hitv;
     logic [2:0]    hit_line;
     logic [63:0]   rl_hit_data;
@@ -446,8 +454,8 @@ module spg2xx (
             dst      <= D_IDLE;
             cpu_done <= 1'b0;
             rl_valid    <= '{default: 1'b0};
-            rl_use      <= '{default: 8'd0};
-            use_ctr     <= 8'd0;
+            plru_cpu    <= 3'd0;
+            plru_ppu    <= 1'b0;
             pf_pending  <= 1'b0;
             pq_v        <= '{default: 1'b0};
             pq_h        <= 3'd0;
@@ -539,8 +547,7 @@ module spg2xx (
                 if (hit_r) begin
                     complete(hit_data_r[ext_sel * 16 +: 16]);
                     ppu_mem_rdata64 <= hit_data_r;
-                    rl_use[hit_line_r] <= use_ctr;
-                    use_ctr <= use_ctr + 8'd1;
+                    touch(hit_line_r);
                     ast <= A_IDLE;
                 end else if (xq_wr) begin
                     // the external bus only holds ROM: writes do nothing
@@ -647,8 +654,7 @@ module spg2xx (
         pq_tag[pq_t[1:0]]   <= tag;
         pq_pf[pq_t[1:0]]    <= pf;
         pq_t                <= pq_t + 3'd1;
-        rl_use[v]           <= use_ctr;
-        use_ctr             <= use_ctr + 8'd1;
+        touch(v);
     endtask
 
 endmodule
