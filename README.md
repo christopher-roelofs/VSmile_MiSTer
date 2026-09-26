@@ -43,9 +43,9 @@ SoC memory map (word addresses, MAME `spg2xx_device::internal_map`):
    registers verified against MAME 0.289.  ✅
 5. **Controller** — V.Smile joystick UART protocol (MAME `bus/vsmile/pad.cpp`).  ✅
 6. **MiSTer top** — `rtl/emu.sv`: SDRAM for cart/BIOS, OSD cart loading,
-   TV mode / region / intro options, joystick.  ✅ (compiles; untested on
-   hardware)
-7. Real hardware testing.
+   TV mode / region / intro options, joystick.  ✅ bitstream built with
+   timing closure (see below)
+7. Real hardware testing.  ⏳ untested
 
 ## Status: the whole console runs in lockstep with MAME
 
@@ -106,6 +106,16 @@ like MAME's screen; `mame_timing` selects MAME's exact 60 Hz frame
 
 ## MiSTer
 
+`releases/VSmile_20260926.rbf` compiles for the DE10-Nano with timing
+closure (setup slack +0.11 ns at 108 MHz, hold +0.25 ns; 39% ALMs, 14%
+block RAM, 47% DSPs).  Getting there took eleven Quartus iterations, mostly
+adding pipeline stages: the MAME-derived code was written as one step per
+state and several of those steps (GPIO write with `/5`, ADPCM decode,
+32-bit mixer products, strip address multiplies, the CPU's decode+ALU) were
+15-40 ns long.  Every change was re-verified against the MAME traces, and
+the audio output stayed bit-identical throughout.  **Untested on hardware
+as of this build.**
+
     /media/fat/_Console/VSmile_<date>.rbf
     /media/fat/games/VSmile/boot.rom        <- optional system ROM (vsmile_v103.bin)
 
@@ -118,8 +128,9 @@ joystick has exactly these).
 
 Video is 320x240 progressive at 59.94 Hz (PAL: 320x288 at 50 Hz), 6.75 MHz
 pixel rate, through the framework's scaler.  Audio is the SPU's 70,312.5 Hz
-stereo stream.  The whole design runs on one 108 MHz clock (4x the
-console's 27 MHz); the CPU's cycle credit absorbs SDRAM latency.
+stereo stream.  The console, SDRAM controller and hps_io run on a 108 MHz
+clock (4x the console's 27 MHz); the scan-out and the framework's video path
+on 54 MHz from the same PLL.  The CPU's cycle credit absorbs SDRAM latency.
 
 ## Layout
 
