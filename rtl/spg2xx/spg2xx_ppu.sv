@@ -31,11 +31,14 @@ module spg2xx_ppu (
     input  logic [8:0]  line_vpos,      // ... this one
     input  logic        last_line,      // ... and it is the frame's last
 
-    // system bus reads
+    // system bus reads; a group read (external memory only) returns the
+    // aligned four words containing mem_addr, word 0 in mem_rdata64[15:0]
     output logic        mem_req,
+    output logic        mem_group,
     output logic [21:0] mem_addr,
     input  logic        mem_ack,
     input  logic [15:0] mem_rdata,
+    input  logic [63:0] mem_rdata64,
 
     // video RAM read port (index = address - 0x2800)
     output logic [10:0] vram_addr,
@@ -370,8 +373,9 @@ module spg2xx_ppu (
                 end
             end
             R_TILE_ISSUE: begin
-                mem_req  <= 1'b1;
-                mem_addr <= pg_ctrl[2] ? {6'd0, pg_tilemap} : {6'd0, pg_tilemap + tile_address};
+                mem_req   <= 1'b1;
+                mem_group <= 1'b0;
+                mem_addr  <= pg_ctrl[2] ? {6'd0, pg_tilemap} : {6'd0, pg_tilemap + tile_address};
                 rs <= R_TILE_RD;
             end
 
@@ -385,8 +389,9 @@ module spg2xx_ppu (
                     rs <= R_TILE;
                 end else if (!pg_ctrl[1]) begin
                     // attributes come from the extended attribute map
-                    mem_req  <= 1'b1;
-                    mem_addr <= pg_ctrl[2] ? {6'd0, pg_exattr} : {6'd0, pg_exattr + (tile_address >> 1)};
+                    mem_req   <= 1'b1;
+                    mem_group <= 1'b0;
+                    mem_addr  <= pg_ctrl[2] ? {6'd0, pg_exattr} : {6'd0, pg_exattr + (tile_address >> 1)};
                     rs <= R_EX_RD;
                 end else
                     page_strip(mem_rdata, pg_attr, pg_ctrl);
@@ -494,15 +499,33 @@ module spg2xx_ppu (
             R_ADDR2: begin
                 logic [21:0] a;
                 a = m_gfx + prod1[21:0] + 22'(prod2);
-                row_addr <= a;
-                mem_addr <= a;
-                mem_req  <= 1'b1;
-                rs       <= R_FETCH;
+                row_addr  <= a;
+                mem_addr  <= a;
+                mem_group <= (a >= 22'h004000);
+                mem_req   <= 1'b1;
+                rs        <= R_FETCH;
             end
 
+            // Row words arrive one at a time from internal memory, or four at
+            // a time (the aligned group) from external memory: the words of
+            // the group inside the row are stored, then the next group.
             R_FETCH: if (mem_ack) begin
-                rowbuf[rb_i[4:0]] <= mem_rdata;
-                if (rb_i + 6'd1 == rb_n) begin
+                logic [5:0] got;            // words of the row covered by this reply
+                logic [21:0] nxt;
+                if (mem_group) begin
+                    logic [1:0] first;      // first word of the group belonging to the row
+                    first = mem_addr[1:0];
+                    got = 6'd4 - 6'(first);
+                    for (int k = 0; k < 4; k++)
+                        if (k >= int'(first) && rb_i + 6'(k) - 6'(first) < rb_n)
+                            rowbuf[rb_i[4:0] + 5'(k) - 5'(first)] <= mem_rdata64[k * 16 +: 16];
+                    nxt = {mem_addr[21:2] + 20'd1, 2'b00};
+                end else begin
+                    rowbuf[rb_i[4:0]] <= mem_rdata;
+                    got = 6'd1;
+                    nxt = mem_addr + 22'd1;
+                end
+                if (rb_i + got >= rb_n) begin
                     mem_req <= 1'b0;
                     rb_i    <= 6'd0;
                     bits    <= 24'd0;
@@ -510,8 +533,9 @@ module spg2xx_ppu (
                     px_i    <= 7'd0;
                     rs      <= R_DRAW;
                 end else begin
-                    rb_i     <= rb_i + 6'd1;
-                    mem_addr <= mem_addr + 22'd1;
+                    rb_i      <= rb_i + got;
+                    mem_addr  <= nxt;
+                    mem_group <= (nxt >= 22'h004000);
                 end
             end
 

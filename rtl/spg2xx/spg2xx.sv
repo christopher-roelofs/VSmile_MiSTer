@@ -157,16 +157,18 @@ module spg2xx (
     // ------------------------------------------------------------------
     // PPU
     // ------------------------------------------------------------------
-    logic        ppu_mem_req, ppu_mem_ack;
+    logic        ppu_mem_req, ppu_mem_ack, ppu_mem_group;
     logic [21:0] ppu_mem_addr;
     logic [15:0] ppu_mem_rdata;
+    logic [63:0] ppu_mem_rdata64;
     logic [10:0] ppu_vram_addr;
     logic [15:0] ppu_vram_q;
 
     spg2xx_ppu ppu (
         .clk, .reset, .clk_vid,
         .regs(vregs), .line_start, .line_vpos(vpos), .last_line,
-        .mem_req(ppu_mem_req), .mem_addr(ppu_mem_addr), .mem_ack(ppu_mem_ack), .mem_rdata(ppu_mem_rdata),
+        .mem_req(ppu_mem_req), .mem_group(ppu_mem_group), .mem_addr(ppu_mem_addr), .mem_ack(ppu_mem_ack),
+        .mem_rdata(ppu_mem_rdata), .mem_rdata64(ppu_mem_rdata64),
         .vram_addr(ppu_vram_addr), .vram_q(ppu_vram_q),
         .out_x, .out_rgb, .out_rgb888,
         .line_done, .done_y, .overrun(ppu_overrun)
@@ -397,6 +399,7 @@ module spg2xx (
                     ast          <= A_BRAM;
                 end else if (is_ext && q_rd && rl_hit) begin
                     complete(rl_hit_data[q_addr[1:0] * 16 +: 16]);
+                    ppu_mem_rdata64 <= rl_hit_data;
                 end else if (is_ext) begin
                     ext_req   <= 1'b1;
                     ext_wr    <= q_wr;
@@ -461,6 +464,7 @@ module spg2xx (
             A_EXT: if (ext_ack) begin
                 ext_req <= 1'b0;
                 complete(ext_rdata[ext_sel * 16 +: 16]);
+                ppu_mem_rdata64 <= ext_rdata;
                 if (!ext_wr) begin
                     rl_valid[rl_fill] <= 1'b1;
                     rl_tag[rl_fill]   <= ext_addr[21:2];
