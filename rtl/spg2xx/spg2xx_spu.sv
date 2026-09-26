@@ -155,8 +155,9 @@ module spg2xx_spu (
 
     logic signed [31:0] ms;               // mixer pipeline sample
     logic signed [31:0] mp, mq;           // mixer partial products
-    logic signed [31:0] pan_l, pan_r;
+    logic signed [15:0] pan_l, pan_r;     // <= 127*127*2
     logic signed [31:0] ml, mr;
+    logic [7:0]  lerp_r;                  // acc[ch][18:11] after the advance
     logic [2:0]  nfetch;                  // samples still to fetch this tick
     logic        playing;
     logic [15:0] raw;
@@ -179,27 +180,38 @@ module spg2xx_spu (
     wire        w_a36   = w[C_ADPCM_SEL][15];
     wire [6:0]  w_edd   = w[C_ENV_DATA][6:0];
 
-    // port B (engine)
+    // creg / preg are true dual-port RAMs: port A for the CPU, port B for
+    // the engine, each in the "new data" read-during-write form that Quartus
+    // infers as M10K (an "old data" same-port read cannot be built there).
     logic [8:0]  pb_addr;
     logic        pb_cwe, pb_pwe;
     logic [15:0] pb_wdata, pb_cq, pb_pq;
-    always_ff @(posedge clk) begin
-        if (pb_cwe) creg[pb_addr] <= pb_wdata;
-        if (pb_pwe) preg[pb_addr] <= pb_wdata;
-        pb_cq <= creg[pb_addr];
-        pb_pq <= preg[pb_addr];
-    end
-
-    // port A (CPU)
     logic [15:0] pa_cq, pa_pq, pa_xq;
     assign idle  = es == E_IDLE && pend_start == 0 && pend_stop == 0 && pend_ramp == 0 && !ack;
     wire  pa_go  = req && idle;
-    always_ff @(posedge clk) begin
-        if (pa_go && we && addr[10:9] == 2'b00) creg[addr[8:0]] <= cpu_creg_value(addr[8:0], wdata);
-        if (pa_go && we && addr[10:9] == 2'b01) preg[addr[8:0]] <= cpu_preg_value(addr[8:0], wdata);
+    wire  pa_cwe = pa_go && we && addr[10:9] == 2'b00;
+    wire  pa_pwe = pa_go && we && addr[10:9] == 2'b01;
+    wire [15:0] pa_cwd = cpu_creg_value(addr[8:0], wdata);
+    wire [15:0] pa_pwd = cpu_preg_value(addr[8:0], wdata);
+
+    always_ff @(posedge clk) begin   // creg port A
+        if (pa_cwe) begin creg[addr[8:0]] <= pa_cwd; pa_cq <= pa_cwd; end
+        else        pa_cq <= creg[addr[8:0]];
+    end
+    always_ff @(posedge clk) begin   // creg port B
+        if (pb_cwe) begin creg[pb_addr] <= pb_wdata; pb_cq <= pb_wdata; end
+        else        pb_cq <= creg[pb_addr];
+    end
+    always_ff @(posedge clk) begin   // preg port A
+        if (pa_pwe) begin preg[addr[8:0]] <= pa_pwd; pa_pq <= pa_pwd; end
+        else        pa_pq <= preg[addr[8:0]];
+    end
+    always_ff @(posedge clk) begin   // preg port B
+        if (pb_pwe) begin preg[pb_addr] <= pb_wdata; pb_pq <= pb_wdata; end
+        else        pb_pq <= preg[pb_addr];
+    end
+    always_ff @(posedge clk) begin   // control registers >= 0x20
         if (pa_go && we && addr[10] && addr[9:5] != 5'd0) xmisc[addr[9:0]] <= wdata;
-        pa_cq <= creg[addr[8:0]];
-        pa_pq <= preg[addr[8:0]];
         pa_xq <= xmisc[addr[9:0]];
     end
 
@@ -378,6 +390,7 @@ module spg2xx_spu (
                 logic [21:0] s;
                 s = {3'd0, acc[ch]} + {1'b0, w_phase_hi[2:0], w_phase, 2'b00};
                 acc[ch] <= s[18:0];
+                lerp_r  <= s[18:11];
                 nfetch  <= s[21:19];
                 playing <= 1'b1;
                 wi      <= 3'd0;
@@ -506,38 +519,55 @@ module spg2xx_spu (
             end
 
             // MAME sound_stream_update, per channel, in three stages
-            E_MIX1: begin   // interpolation: the two products
-                logic signed [31:0] sm, p, lerp;
-                sm   = 32'(signed'(w[C_WDATA] ^ 16'h8000));
-                p    = 32'(signed'(w[C_WDATA_PREV] ^ 16'h8000));
-                lerp = x[X_CONTROL][9] ? 32'sd256 : $signed({24'd0, acc[ch][18:11]});
-                mp <= p * (32'sd256 - lerp);
-                mq <= sm * lerp;
+            E_MIX1: begin   // interpolation: the two products (17 x 10 bits)
+                logic signed [16:0] sm, p;
+                logic signed [9:0]  lerp, ilerp;
+                logic signed [26:0] pp, pq;
+                sm    = 17'(signed'(w[C_WDATA] ^ 16'h8000));
+                p     = 17'(signed'(w[C_WDATA_PREV] ^ 16'h8000));
+                lerp  = x[X_CONTROL][9] ? 10'sd256 : 10'({2'b00, lerp_r});
+                ilerp = 10'sd256 - lerp;
+                pp = p * ilerp;
+                pq = sm * lerp;
+                mp <= 32'(pp);
+                mq <= 32'(pq);
                 es <= E_MIX1B;
             end
             E_MIX1B: begin
                 ms <= (mq >>> 8) + (mp >>> 8);
                 es <= E_MIX2;
             end
-            E_MIX2: begin   // envelope level; pan factors
-                logic signed [31:0] vol, pan;
-                ms  <= (ms * $signed({25'd0, w_edd})) >>> 7;
-                vol = $signed({25'd0, w[C_PAN_VOL][6:0]});
-                pan = $signed({25'd0, w[C_PAN_VOL][14:8]});
-                if (pan < 32'sd64) begin
-                    pan_l <= 32'sd127 * vol;
-                    pan_r <= pan * 32'sd2 * vol;
+            E_MIX2: begin   // envelope level (18 x 8 bits); pan factors (8 x 8)
+                logic signed [17:0] m18;
+                logic signed [7:0]  edd8;
+                logic signed [25:0] pe;
+                logic [7:0]  vol, pan;
+                logic [15:0] pl, pr;
+                m18  = ms[17:0];
+                edd8 = {1'b0, w_edd};
+                pe   = m18 * edd8;
+                ms  <= 32'(pe >>> 7);
+                vol = {1'b0, w[C_PAN_VOL][6:0]};
+                pan = {1'b0, w[C_PAN_VOL][14:8]};
+                if (pan < 8'd64) begin
+                    pl = 16'd127 * 16'(vol);
+                    pr = 16'(pan) * 16'd2 * 16'(vol);
                 end else begin
-                    pan_l <= (32'sd127 - pan) * 32'sd2 * vol;
-                    pan_r <= 32'sd127 * vol;
+                    pl = (16'd127 - 16'(pan)) * 16'd2 * 16'(vol);
+                    pr = 16'd127 * 16'(vol);
                 end
+                pan_l <= pl;
+                pan_r <= pr;
                 es <= E_MIX3;
             end
-            E_MIX3: begin   // pan / volume products
-                logic signed [31:0] s16;
-                s16 = 32'(signed'(ms[15:0]));
-                mp <= s16 * 32'(signed'(pan_l[15:0]));
-                mq <= s16 * 32'(signed'(pan_r[15:0]));
+            E_MIX3: begin   // pan / volume products (16 x 16 bits)
+                logic signed [15:0] s16;
+                logic signed [31:0] pl, pr;
+                s16 = ms[15:0];
+                pl = s16 * pan_l;
+                pr = s16 * pan_r;
+                mp <= pl;
+                mq <= pr;
                 es <= E_MIX3B;
             end
             E_MIX3B: begin  // accumulate
@@ -629,12 +659,17 @@ module spg2xx_spu (
                 mr <= r;
                 es <= E_OUT2;
             end
-            E_OUT2: begin
-                logic signed [31:0] l, r;
-                l = (ml * 32'(signed'(x[X_MAINVOL]))) >>> 7;
-                r = (mr * 32'(signed'(x[X_MAINVOL]))) >>> 7;
-                out_l <= l[15:0];
-                out_r <= r[15:0];
+            E_OUT2: begin   // main volume (22 x 8 bits)
+                logic signed [21:0] l22, r22;
+                logic signed [7:0]  mv;
+                logic signed [29:0] pl, pr;
+                l22 = ml[21:0];
+                r22 = mr[21:0];
+                mv  = {1'b0, x[X_MAINVOL][6:0]};
+                pl = l22 * mv;
+                pr = r22 * mv;
+                out_l <= pl[22:7];
+                out_r <= pr[22:7];
                 out_strobe <= 1'b1;
                 es <= E_IDLE;
             end
