@@ -113,7 +113,7 @@ module spg2xx_ppu (
         R_SCAN,
         R_PRIO,
         R_PAGE, R_TILE, R_TILE_ISSUE, R_TILE_RD, R_EX_RD,
-        R_SPR, R_SPR_RD, R_SPR_SETUP, R_SPR_SETUP2,
+        R_SPR, R_SPR_RD, R_SPR_SETUP, R_SPR_SETUP2, R_SPR_SETUP3,
         R_ADDR1, R_ADDR2, R_FETCH, R_DRAW, R_DRAIN,
         R_DONE
     } rstate_t;
@@ -182,10 +182,12 @@ module spg2xx_ppu (
     logic [4:0]  nbits;
     logic [6:0]  px_i;
 
-    // pixel pipeline: stage 1 (address visible), stage 2 (data visible)
-    logic        p1_v, p2_v;
-    logic [8:0]  p1_pos, p2_pos;
-    logic        p1_blend, p2_blend;
+    // pixel pipeline: stage 1 (address visible), stage 2 (data visible,
+    // latched), stage 3 (blend + write)
+    logic        p1_v, p2_v, p3_v;
+    logic [8:0]  p1_pos, p2_pos, p3_pos;
+    logic        p1_blend, p2_blend, p3_blend;
+    logic [15:0] p3_rgb, p3_lb;
 
     wire [3:0]  s_ncbpp = {s_bpp, 1'b0};
 
@@ -253,6 +255,7 @@ module spg2xx_ppu (
         overrun   <= 1'b0;
         p1_v      <= 1'b0;
         p2_v      <= 1'b0;
+        p3_v      <= 1'b0;
 
         if (reset) begin
             rs      <= R_IDLE;
@@ -468,20 +471,18 @@ module spg2xx_ppu (
                 sp_ux <= ux; sp_line <= sl; sp_draw <= draw;
                 rs <= R_SPR_SETUP2;
             end
-            R_SPR_SETUP2: begin   // row geometry, then the strip
-                logic [5:0]  bpr;
+            R_SPR_SETUP2: begin   // words per row
+                s_bpr <= 6'((12'(sp_ncb) * 12'(sp_tw)) >> 4);
+                npix  <= sp_tw;
+                rs    <= sp_draw ? R_SPR_SETUP3 : R_SPR;
+            end
+            R_SPR_SETUP3: begin   // words per tile, then the strip
                 logic [11:0] wpt;
                 logic [7:0]  po;
-                bpr = 6'((12'(sp_ncb) * 12'(sp_tw)) >> 4);
-                wpt = 12'(12'(bpr) * 12'(sp_th));
+                wpt = 12'(12'(s_bpr) * 12'(sp_th));
                 po  = {sp_attr[11:8], 4'd0} & ~(8'((8'd1 << sp_ncb) - 8'd1));
-                s_bpr <= bpr;
                 s_wpt <= wpt;
-                npix  <= sp_tw;
-                if (sp_draw)
-                    strip_start(spr_gfx, spr_w[0], sp_line, sp_th, bpr, wpt, sp_attr[2], sp_attr[3], sp_attr[14], po, sp_ux, R_SPR);
-                else
-                    rs <= R_SPR;
+                strip_start(spr_gfx, spr_w[0], sp_line, sp_th, s_bpr, wpt, sp_attr[2], sp_attr[3], sp_attr[14], po, sp_ux, R_SPR);
             end
 
             // ---- strip: address, fetch the row's words, draw one pixel per clk ----
@@ -528,9 +529,9 @@ module spg2xx_ppu (
                 px_i <= px_i + 7'd1;
             end
 
-            R_DRAIN: begin
+            R_DRAIN: begin   // let the last pixel's write land before the next strip reads
                 cnt <= cnt + 10'd1;
-                if (cnt[0]) rs <= ret;
+                if (cnt == 10'd2) rs <= ret;
             end
 
             R_DONE: begin
@@ -546,19 +547,21 @@ module spg2xx_ppu (
             p2_v     <= p1_v;
             p2_pos   <= p1_pos;
             p2_blend <= p1_blend;
-            if (p2_v) begin
-                logic [15:0] rgb;
-                rgb = vram_q;
-                if (!rgb[15]) begin
-                    lb_we    <= 1'b1;
-                    lb_waddr <= p2_pos;
-                    if (p2_blend && !lb_q[15])
-                        lb_wdata <= {1'b0, mixc(lb_q[14:10], rgb[14:10], blendlevel),
-                                           mixc(lb_q[9:5],   rgb[9:5],   blendlevel),
-                                           mixc(lb_q[4:0],   rgb[4:0],   blendlevel)};
-                    else
-                        lb_wdata <= rgb;
-                end
+            p3_v     <= p2_v;
+            p3_pos   <= p2_pos;
+            p3_blend <= p2_blend;
+            p3_rgb   <= vram_q;
+            p3_lb    <= lb_q;
+            // ---- stage 3: blend and write ----
+            if (p3_v && !p3_rgb[15]) begin
+                lb_we    <= 1'b1;
+                lb_waddr <= p3_pos;
+                if (p3_blend && !p3_lb[15])
+                    lb_wdata <= {1'b0, mixc(p3_lb[14:10], p3_rgb[14:10], blendlevel),
+                                       mixc(p3_lb[9:5],   p3_rgb[9:5],   blendlevel),
+                                       mixc(p3_lb[4:0],   p3_rgb[4:0],   blendlevel)};
+                else
+                    lb_wdata <= p3_rgb;
             end
         end
     end

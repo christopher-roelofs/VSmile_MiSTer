@@ -146,8 +146,10 @@ module spg2xx_spu (
     // the current channel's engine state, latched in E_CH (arrays indexed by
     // `ch` would otherwise feed the arithmetic through a 16-way mux)
     logic [26:0] envclk_r, envclk_reload_r;
+    logic        envclk_last;             // envclk_r <= 1: expires this tick
     logic [16:0] ramp_r;
     logic [21:0] envaddr_r;
+    logic [3:0]  a36rem_r;
 
     // ADPCM decode pipeline (E_DEC1 latches the channel state, E_DEC2/3 compute)
     logic signed [17:0] dec_d;
@@ -383,9 +385,11 @@ module spg2xx_spu (
             end
             E_CH: begin
                 envclk_r        <= envclk_frame[ch];
+                envclk_last     <= (envclk_frame[ch] <= 27'd1);
                 envclk_reload_r <= envclk_count(env_clock(ch));
                 ramp_r          <= ramp_frame[ch];
                 envaddr_r       <= env_addr[ch];
+                a36rem_r        <= a36_rem[ch];
                 if (x[X_STATUS][ch]) begin
                     li <= 0;
                     load_cmd <= 1'b0;
@@ -424,7 +428,7 @@ module spg2xx_spu (
             E_FETCH: begin  // MAME fetch_sample, part 1
                 w[C_WDATA_PREV] <= w[C_WDATA];
                 if (fiq_timer_on[ch]) x[X_FIQ_ST][ch] <= 1'b1;
-                if (w_a36 && w_tone != 0 && a36_rem[ch] == 0) begin
+                if (w_a36 && w_tone != 0 && a36rem_r == 0) begin
                     mem_req  <= 1'b1;
                     mem_addr <= w_waddr;
                     es <= E_RD_HDR;
@@ -442,6 +446,7 @@ module spg2xx_spu (
                 mem_req <= 1'b0;
                 a36_hdr[ch] <= mem_rdata;
                 a36_rem[ch] <= 4'd8;
+                a36rem_r    <= 4'd8;
                 na = w_waddr + 22'd1;
                 w[C_MODE][5:0]    <= na[21:16];
                 w[C_WAVE_ADDR]    <= na[15:0];
@@ -505,7 +510,7 @@ module spg2xx_spu (
                         sh = sh + 5'd4;
                         if (sh >= 5'd16) begin
                             sh = 0; a = a + 22'd1;
-                            if (w_a36) a36_rem[ch] <= a36_rem[ch] - 4'd1;
+                            if (w_a36) begin a36_rem[ch] <= a36rem_r - 4'd1; a36rem_r <= a36rem_r - 4'd1; end
                         end
                     end else if (m[14]) begin
                         a = a + 22'd1;
@@ -634,10 +639,8 @@ module spg2xx_spu (
                     end
                     es <= E_WB;
                 end else if (!x[X_ENV_MODE][ch]) begin
-                    logic [26:0] f;
-                    f = (envclk_r > 0) ? envclk_r - 27'd1 : 27'd0;
-                    envclk_frame[ch] <= (f == 0) ? envclk_reload_r : f;
-                    es <= (f == 0) ? E_ENV2 : E_WB;
+                    envclk_frame[ch] <= envclk_last ? envclk_reload_r : envclk_r - 27'd1;
+                    es <= envclk_last ? E_ENV2 : E_WB;
                 end else
                     es <= E_WB;
             end

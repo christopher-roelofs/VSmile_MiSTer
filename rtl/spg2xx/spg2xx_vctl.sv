@@ -46,6 +46,16 @@ module spg2xx_vctl (
 
     logic [15:0] irq_en, irq_st;   // 0x62 / 0x63
 
+    // writes are applied one clk after the strobe (shorter decode path)
+    logic        wr_q;
+    logic [7:0]  addr_q;
+    logic [15:0] wdata_q;
+    always_ff @(posedge clk) begin
+        wr_q    <= wr && !reset;
+        addr_q  <= addr;
+        wdata_q <= wdata;
+    end
+
     // ------------------------------------------------------------------
     // Beam timing
     // ------------------------------------------------------------------
@@ -137,25 +147,25 @@ module spg2xx_vctl (
             if (spr_dma_done && irq_en[2]) set[2] = 1'b1;
             if (spr_dma_done) regs[8'h72] <= 16'd0;
 
-            if (wr) begin
-                case (addr)
-                    8'h10, 8'h16: regs[addr] <= wdata & 16'h01ff;
-                    8'h11, 8'h17: regs[addr] <= wdata & 16'h00ff;
-                    8'h2a:        regs[addr] <= wdata & 16'h0003;
-                    8'h30:        regs[addr] <= wdata & 16'h00ff;
-                    8'h36, 8'h37: regs[addr] <= wdata & 16'h01ff;
-                    8'h39:        regs[addr] <= wdata & 16'h0001;
-                    8'h3d:        regs[addr] <= wdata & 16'h000f;
+            if (wr_q) begin
+                case (addr_q)
+                    8'h10, 8'h16: regs[addr_q] <= wdata_q & 16'h01ff;
+                    8'h11, 8'h17: regs[addr_q] <= wdata_q & 16'h00ff;
+                    8'h2a:        regs[addr_q] <= wdata_q & 16'h0003;
+                    8'h30:        regs[addr_q] <= wdata_q & 16'h00ff;
+                    8'h36, 8'h37: regs[addr_q] <= wdata_q & 16'h01ff;
+                    8'h39:        regs[addr_q] <= wdata_q & 16'h0001;
+                    8'h3d:        regs[addr_q] <= wdata_q & 16'h000f;
                     8'h3e, 8'h3f: ;
-                    8'h62:        irq_en <= wdata & 16'h0007;
-                    8'h63:        clr = clr | wdata;
-                    8'h70:        regs[addr] <= wdata & 16'h3fff;
-                    8'h71:        regs[addr] <= wdata & 16'h03ff;
+                    8'h62:        irq_en <= wdata_q & 16'h0007;
+                    8'h63:        clr = clr | wdata_q;
+                    8'h70:        regs[addr_q] <= wdata_q & 16'h3fff;
+                    8'h71:        regs[addr_q] <= wdata_q & 16'h03ff;
                     8'h72: begin
-                        spr_dma_len   <= (wdata[9:0] != 0) ? {1'b0, wdata[9:0]} : 11'h400;
+                        spr_dma_len   <= (wdata_q[9:0] != 0) ? {1'b0, wdata_q[9:0]} : 11'h400;
                         spr_dma_start <= 1'b1;
                     end
-                    default:      regs[addr] <= wdata;
+                    default:      regs[addr_q] <= wdata_q;
                 endcase
             end
 
