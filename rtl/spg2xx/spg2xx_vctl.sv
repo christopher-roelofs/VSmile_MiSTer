@@ -34,6 +34,7 @@ module spg2xx_vctl (
 
     output logic [8:0]  vpos,
     output logic [8:0]  hpos,
+    output logic [10:0] hcnt_out,       // 27 MHz ticks into the line (scan-out)
     output logic        vblank,
     output logic        line_start,     // one clk, vpos holds the new line
     output logic        last_line,      // vpos is the frame's last line
@@ -59,6 +60,7 @@ module spg2xx_vctl (
     logic        pos_hit;
 
     assign last_line = (vpos == num_lines - 9'd1);
+    assign hcnt_out  = hcnt;
 
     always_ff @(posedge clk) begin
         pos_hit    <= 1'b0;

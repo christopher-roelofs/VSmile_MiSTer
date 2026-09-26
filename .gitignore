@@ -8,3 +8,10 @@ sim/*/obj_dir/
 db/
 incremental_db/
 output_files/
+build.log
+*.qws
+*.rpt
+*.summary
+c5_pin_model_dump.txt
+jtag.cdf
+PLLJ_PLLSPE_INFO.txt

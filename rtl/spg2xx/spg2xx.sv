@@ -56,6 +56,7 @@ module spg2xx (
     // video timing and pixel output
     output logic [8:0]  vpos,
     output logic [8:0]  hpos,
+    output logic [10:0] hcnt,
     output logic        vblank,
     input  logic [8:0]  out_x,
     output logic [14:0] out_rgb,
@@ -146,7 +147,7 @@ module spg2xx (
         .addr(reg_off), .rd(vc_rd), .wr(vc_wr), .wdata(reg_wdata), .rdata(vc_rdata),
         .spr_dma_start(), .spr_dma_src(), .spr_dma_dst(), .spr_dma_len(),
         .spr_dma_done,
-        .vpos, .hpos, .vblank, .line_start, .last_line, .irq(irq_video),
+        .vpos, .hpos, .hcnt_out(hcnt), .vblank, .line_start, .last_line, .irq(irq_video),
         .regs(vregs)
     );
 

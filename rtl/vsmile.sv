@@ -39,6 +39,7 @@ module vsmile (
 
     output logic [8:0]  vpos,
     output logic [8:0]  hpos,
+    output logic [10:0] hcnt,
     output logic        vblank,
     input  logic [8:0]  out_x,
     output logic [14:0] out_rgb,
@@ -111,7 +112,7 @@ module vsmile (
         .uart_tx_valid, .uart_tx_data, .uart_rx_valid, .uart_rx_data,
         .extint(ctrl_rts), .extint_evt(ctrl_rts_evt),
         .audio_l, .audio_r, .audio_strobe,
-        .vpos, .hpos, .vblank,
+        .vpos, .hpos, .hcnt, .vblank,
         .out_x, .out_rgb, .out_rgb888, .line_done, .done_y, .ppu_overrun,
         .sim_io_override, .sim_io_rdata, .sim_irq_override, .sim_irq,
         .dbg_io_rd, .dbg_io_wr, .dbg_io_addr, .dbg_io_wdata, .dbg_io_rtl_rdata, .soc_irq,
