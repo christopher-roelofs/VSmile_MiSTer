@@ -36,41 +36,66 @@ SoC memory map (word addresses, MAME `spg2xx_device::internal_map`):
 1. **µ'nSP CPU** — `rtl/unsp/unsp_core.sv`, verified instruction-by-instruction
    against MAME golden traces.  ✅
 2. **SoC skeleton** — RAM, interrupt controller, timers, GPIO/chip-select,
-   UART, system DMA; checked against the same traces with register reads
-   produced by RTL instead of replayed.
+   UART, system + sprite DMA, video timing/IRQs, board-level banking.  ✅
 3. **PPU** — tile layers + sprites + palette, line-based renderer; compared
    against MAME frame snapshots.
 4. **SPU** — 16-channel audio.
-5. **Controller** — V.Smile joystick UART protocol (MAME `bus/vsmile/pad.cpp`).
+5. **Controller** — V.Smile joystick UART protocol (MAME `bus/vsmile/pad.cpp`);
+   also the audio *registers* (status bits the game polls) ahead of the SPU.
 6. **MiSTer top** — `emu.sv` from Template_MiSTer, SDRAM for cart/BIOS,
    OSD cart loading, region/language DIP settings.
 7. Real hardware testing.
 
-## Status: the CPU matches MAME
+## Status: the SoC runs in lockstep with MAME
 
-`sim/cpu` runs the RTL in lockstep with a MAME trace: PC and all registers
-are compared after every instruction, and interrupts are injected at the
-exact instruction boundary where MAME took them.  RAM, both DMA engines and
-cart banking are modelled in the testbench; SoC register reads are replayed
-from MAME's bus log and every register write is checked against it.
+**CPU** (`sim/cpu`): the RTL runs in lockstep with a MAME trace — PC and all
+registers compared after every instruction, interrupts injected at the exact
+instruction boundary where MAME took them.  7 carts, ~60 M instructions,
+bit-identical; 27,450,003 cycles for Zayzoo's first 1.017 s vs. MAME's
+27,450,000.
 
-Zayzoo (USA): **6,859,648 instructions (1 s of emulated time, 454
-interrupts) bit-identical to MAME**, with cycle counts matching MAME's
-per-instruction charges (27.45 M cycles at 27 MHz).
+**SoC** (`sim/soc`, `rtl/vsmile.sv`): the whole system — RAM, video RAMs,
+system and sprite DMA, cart/BIOS banking, I/O block, video timing — in
+lockstep with the same traces.  Register reads are fed from MAME's log so
+the trace stays comparable, while the RTL computes its own value for every
+read and each disagreement is reported:
+
+* all 7 carts pass (every RAM/DMA effect and every register write matches)
+* every I/O, timer, interrupt-status and video register read matches MAME,
+  except those that depend on the controller (not implemented yet: RTS
+  line, UART receive) and ±1 jitter in beam-position reads
+* free-running (RTL generates its own interrupts and register values),
+  Zayzoo follows MAME's exact instruction stream for 888,759 instructions,
+  until it reads an audio register (SPU not implemented yet), and then keeps
+  running with MAME's interrupt rates
+
+Timing model: the CPU keeps a cycle credit (+1 per 27 MHz tick, minus MAME's
+charge per instruction) and only starts an instruction when it is not ahead
+of real time; within an instruction it runs at the system clock.  Bus
+stalls, DMA and interrupt entry are absorbed by catching up, so instruction
+k starts at the same 27 MHz tick as in MAME.  The beam starts at line 240
+like MAME's screen; `mame_timing` selects MAME's exact 60 Hz frame
+(450,000 clocks) instead of true NTSC (449,592).
 
 ## Layout
 
     rtl/unsp/        µ'nSP CPU core
-    sim/cpu/         Verilator lockstep testbench (vs. MAME trace)
+    rtl/spg2xx/      SoC: top/bus/DMA (spg2xx.sv), I/O (spg2xx_io.sv),
+                     video control + timing (spg2xx_vctl.sv)
+    rtl/vsmile.sv    board: cart/BIOS banking, DIP switches, controller lines
+    sim/cpu/         CPU lockstep testbench (vs. MAME trace)
+    sim/soc/         system lockstep / free-run testbench
     scripts/         mame_trace.sh: capture golden traces from MAME 0.264+
+                     cpu_sweep.sh, soc_sweep.sh: run testbenches over traces
     ref/mame/        MAME reference sources (see MAME_REVISION)
     ROMS/            cart dumps (not in git)
 
 ## Running the CPU check
 
     scripts/mame_trace.sh "ROMS/Zayzoo - An Earth Adventure (USA).bin" /tmp/tr_zayzoo 1
-    make -C sim/cpu
-    sim/cpu/obj_dir/Vunsp_core "ROMS/Zayzoo - An Earth Adventure (USA).bin" /tmp/tr_zayzoo
+    scripts/cpu_sweep.sh /tmp/tr_zayzoo
+    scripts/soc_sweep.sh /tmp/tr_zayzoo
+    FREERUN=1 sim/soc/obj_dir/Vvsmile "ROMS/Zayzoo - An Earth Adventure (USA).bin" /tmp/tr_zayzoo 7000000
 
 `mame_trace.sh` needs MAME with the `vsmile` driver; it creates a
 placeholder system ROM if `roms/mame/vsmile/vsmile_v103.bin` is absent.

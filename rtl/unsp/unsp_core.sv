@@ -2,15 +2,22 @@
 //
 // Behaviour follows MAME's unsp_device interpreter (src/devices/cpu/unsp,
 // Segher Boessenkool / Ryan Holtz / David Haywood, GPL-2.0+), including its
-// per-instruction cycle counts: every instruction occupies at least as many
-// `ce` ticks as MAME charges for it.  Bus waits beyond that stretch it.
+// per-instruction cycle charges.
+//
+// Timing: the core keeps a cycle credit.  Every `ce` (27 MHz tick) adds one,
+// every instruction subtracts MAME's charge for it when it finishes, and a
+// new instruction starts only while the credit is not negative.  Within an
+// instruction the FSM steps on every `clk`.  So instruction k starts at the
+// 27 MHz tick equal to the sum of the charges of instructions 0..k-1 (as in
+// MAME), and bus stalls, DMA and interrupt entry (free in MAME) are absorbed
+// by catching up afterwards rather than slowing the CPU down.
 //
 // Registers: r[0]=SP r[1..4]=R1..R4 r[5]=BP r[6]=SR r[7]=PC
 // SR: [15:10] DS  [9] N  [8] Z  [7] S  [6] C  [5:0] CS (code segment)
 // Address space: 22-bit word addresses ({CS,PC} for code, {DS,reg} for data).
 //
-// Bus: addr/rd/wr/wdata are held stable until a `ce` tick with `ready` high;
-// rdata is sampled on that tick.  irq[0] = FIQ, irq[1..8] = IRQ0..IRQ7
+// Bus: addr/rd/wr/wdata are held stable until a clk with `ready` high (a
+// one-clk acknowledge); rdata is sampled on that clk.  irq[0] = FIQ, irq[1..8] = IRQ0..IRQ7
 // (level-sensitive, same numbering as MAME's UNSP_*_LINE inputs).
 //
 // License: GPL-2.0-or-later (derived from MAME's GPL-2.0+ µ'nSP core).
@@ -84,7 +91,6 @@ module unsp_core (
         S_MULS_RS,    // muls: read [rs+i]
         S_MULS_WR,    // muls: FIR shift write-back
         S_MULS_END,
-        S_WAIT,       // pad to MAME cycle count
         S_INT_PC,
         S_INT_SR,
         S_INT_VEC
@@ -93,8 +99,9 @@ module unsp_core (
     state_t      state;
     logic [15:0] ir;
     logic [15:0] imm;
-    logic [5:0]  cyc;       // ce ticks spent in this instruction
-    logic [5:0]  cost;      // MAME cycle cost of this instruction
+    logic signed [15:0] credit;   // 27 MHz ticks elapsed - cycles charged
+    logic [5:0]  charge;          // this clk's charge (set by finish)
+    wire         can_start = !credit[15];
     logic        no_irq;    // RETI: MAME skips the IRQ check after it
 
     // operand latches
@@ -312,12 +319,10 @@ module unsp_core (
     // ------------------------------------------------------------------
     // Sequential
     // ------------------------------------------------------------------
-    // End of instruction: pad to `cost`, then check interrupts / fetch.
+    // End of instruction: charge MAME's cycles, then check interrupts / fetch.
     task automatic finish(input logic [5:0] c);
-        if (cyc + 6'd1 < c) begin
-            cost  <= c;
-            state <= S_WAIT;
-        end else if (!no_irq && int_take) begin
+        charge = c;
+        if (!no_irq && int_take) begin
             int_line <= int_sel;
             state    <= S_INT_PC;
         end else begin
@@ -344,10 +349,10 @@ module unsp_core (
             in_irq   <= 1'b0;
             in_fiq   <= 1'b0;
             state    <= S_RESET;
-            cyc      <= 6'd0;
+            credit   <= 16'sd0;
             no_irq   <= 1'b0;
-        end else if (ce) begin
-            cyc <= cyc + 6'd1;
+        end else begin
+            charge = 6'd0;
 
             case (state)
             // ----------------------------------------------------------
@@ -356,13 +361,12 @@ module unsp_core (
                 state <= S_FETCH;
             end
 
-            S_FETCH: if (ready) begin
+            S_FETCH: if (can_start && ready) begin
                 ir        <= rdata;
                 dbg_fetch <= 1'b1;
                 dbg_pc    <= lpc;
                 dbg_op    <= rdata;
                 lpc_inc();
-                cyc       <= 6'd1;
                 no_irq    <= 1'b0;
                 state     <= S_DECODE;
             end
@@ -655,17 +659,6 @@ module unsp_core (
                 finish(6'd0);
             end
 
-            // ----------------------------------------------------------
-            S_WAIT: begin
-                if (cyc + 6'd1 >= cost) begin
-                    if (!no_irq && int_take) begin
-                        int_line <= int_sel;
-                        state    <= S_INT_PC;
-                    end else
-                        state <= S_FETCH;
-                end
-            end
-
             S_INT_PC: if (ready) begin
                 r[SP] <= r[SP] - 16'd1;
                 state <= S_INT_SR;
@@ -689,8 +682,16 @@ module unsp_core (
             default: state <= S_FETCH;
             endcase
 
-            if (ds_we) r[SR][15:10] <= ds_wdata;
+            // credit += ce - charge, saturating well above any stall
+            begin
+                logic signed [16:0] c;
+                c = 17'(credit) + (ce ? 17'sd1 : 17'sd0) - 17'(signed'({1'b0, charge}));
+                credit <= (c > 17'sd8191) ? 16'sd8191 : 16'(c);
+            end
         end
+
+        // SoC write to 0x3D2F; may arrive on any clk, not just a CPU tick
+        if (!reset && ds_we) r[SR][15:10] <= ds_wdata;
     end
 
     // ALU execute + write-back for register destinations, and the
@@ -722,7 +723,7 @@ module unsp_core (
         wdata = 16'd0;
         case (state)
             S_RESET:   begin addr = 22'h00fff7; rd = 1'b1; end
-            S_FETCH,
+            S_FETCH:   begin addr = lpc; rd = can_start; end
             S_IMM:     begin addr = lpc; rd = 1'b1; end
             S_MRD:     begin addr = ea; rd = 1'b1; end
             S_MWR:     begin addr = ea; wr = 1'b1; wdata = mwr_data; end
