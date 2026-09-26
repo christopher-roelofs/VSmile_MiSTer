@@ -228,7 +228,7 @@ module spg2xx (
     // ------------------------------------------------------------------
     // Bus unit: one access at a time for the CPU or a DMA engine
     // ------------------------------------------------------------------
-    typedef enum logic [2:0] { A_IDLE, A_BRAM, A_EXT, A_REG, A_REG2, A_AUD } astate_t;
+    typedef enum logic [2:0] { A_IDLE, A_BRAM, A_EXT, A_REG, A_REG2, A_AUD, A_CHK } astate_t;
     astate_t ast;
 
     // DMA engine
@@ -282,7 +282,7 @@ module spg2xx (
     // then complete in one clk
     // an ext miss waits while a prefetch occupies the bus (it may even be
     // fetching the wanted group); hits and internal accesses never wait
-    wire         q_valid = q_want && !(is_audio && !spu_idle) && !(is_ext && !(q_rd && rl_hit) && pf_active);
+    wire         q_valid = q_want && !(is_audio && !spu_idle);
     wire         go      = (ast == A_IDLE) && q_valid;
 
     // address decode
@@ -356,8 +356,10 @@ module spg2xx (
     logic [1:0]  ext_sel;               // word of the group wanted
     logic        pf_pending, pf_active;   // prefetch wanted / in flight on the ext bus
     logic [19:0] pf_tag;
-    wire         hit0 = rl_valid[0] && (q_addr[21:2] == rl_tag[0]);
-    wire         hit1 = rl_valid[1] && (q_addr[21:2] == rl_tag[1]);
+    // ext requests are latched (A_CHK) before the cache lookup so the
+    // requester's address arithmetic is not on the compare path
+    wire         hit0 = rl_valid[0] && (ext_addr[21:2] == rl_tag[0]);
+    wire         hit1 = rl_valid[1] && (ext_addr[21:2] == rl_tag[1]);
     wire         rl_hit = hit0 || hit1;
     wire [63:0]  rl_hit_data = hit0 ? rl_data[0] : rl_data[1];
 
@@ -397,18 +399,12 @@ module spg2xx (
                 end else if (is_bram) begin
                     bram_sel     <= is_ram ? 2'd0 : 2'd1;
                     ast          <= A_BRAM;
-                end else if (is_ext && q_rd && rl_hit) begin
-                    complete(rl_hit_data[q_addr[1:0] * 16 +: 16]);
-                    ppu_mem_rdata64 <= rl_hit_data;
                 end else if (is_ext) begin
-                    ext_req   <= 1'b1;
                     ext_wr    <= q_wr;
                     ext_addr  <= q_addr;
                     ext_wdata <= q_wdata;
                     ext_sel   <= q_addr[1:0];
-                    // replace the line that does not hold the previous group
-                    rl_fill   <= (rl_valid[0] && rl_tag[0] == q_addr[21:2] - 20'd1) ? 1'b1 : 1'b0;
-                    ast       <= A_EXT;
+                    ast       <= A_CHK;
                 end else begin
                     // registers / unmapped: latch, perform next clk
                     rq_addr  <= q_addr[15:0];
@@ -461,6 +457,20 @@ module spg2xx (
                 complete(v);
                 ast <= A_IDLE;
             end
+            A_CHK: begin
+                // cache lookup on the latched address; a miss waits for a
+                // prefetch in flight (it may be bringing this very group)
+                if (!ext_wr && rl_hit) begin
+                    complete(rl_hit_data[ext_sel * 16 +: 16]);
+                    ppu_mem_rdata64 <= rl_hit_data;
+                    ast <= A_IDLE;
+                end else if (!pf_active) begin
+                    ext_req <= 1'b1;
+                    // replace the line that does not hold the previous group
+                    rl_fill <= (rl_valid[0] && rl_tag[0] == ext_addr[21:2] - 20'd1) ? 1'b1 : 1'b0;
+                    ast     <= A_EXT;
+                end
+            end
             A_EXT: if (ext_ack) begin
                 ext_req <= 1'b0;
                 complete(ext_rdata[ext_sel * 16 +: 16]);
@@ -487,7 +497,7 @@ module spg2xx (
                     rl_tag[rl_fill]   <= ext_addr[21:2];
                     rl_data[rl_fill]  <= ext_rdata;
                 end
-            end else if (pf_pending && ast == A_IDLE && !(go && is_ext)) begin
+            end else if (pf_pending && ast == A_IDLE && !(go && is_ext) && !ext_req) begin
                 pf_pending <= 1'b0;
                 pf_active  <= 1'b1;
                 ext_req    <= 1'b1;
