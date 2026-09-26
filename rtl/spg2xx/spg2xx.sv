@@ -223,7 +223,7 @@ module spg2xx (
     // ------------------------------------------------------------------
     // Bus unit: one access at a time for the CPU or a DMA engine
     // ------------------------------------------------------------------
-    typedef enum logic [1:0] { A_IDLE, A_BRAM, A_EXT } astate_t;
+    typedef enum logic [1:0] { A_IDLE, A_BRAM, A_EXT, A_REG } astate_t;
     astate_t ast;
 
     // DMA engine
@@ -274,12 +274,22 @@ module spg2xx (
     // SoC register ranges MAME's trace logs (for the sim override)
     wire is_logged = is_vreg || is_audio || is_io || (!is_ext && q_addr[13:8] == 6'h3e);
 
-    assign reg_off   = q_addr[7:0];
-    assign reg_wdata = q_wdata;
-    assign io_rd = go && q_rd && is_io;
-    assign io_wr = go && q_wr && is_io;
-    assign vc_rd = go && q_rd && is_vreg;
-    assign vc_wr = go && q_wr && is_vreg;
+    // Register accesses are latched at accept and performed one clk later
+    // (A_REG): keeps the CPU-address -> peripheral logic path short.
+    logic [15:0] rq_addr, rq_wdata;
+    logic        rq_rd, rq_wr, rq_cpu;
+    wire rq_is_vreg = rq_addr[13:8] == 6'h28;
+    wire rq_is_io   = rq_addr[13:8] == 6'h3d;
+    wire rq_is_dma  = rq_addr[13:2] == 12'hf80;
+    wire rq_logged  = rq_is_vreg || rq_is_io || rq_addr[13:8] == 6'h3e;
+    wire in_reg     = (ast == A_REG);
+
+    assign reg_off   = rq_addr[7:0];
+    assign reg_wdata = rq_wdata;
+    assign io_rd = in_reg && rq_rd && rq_is_io;
+    assign io_wr = in_reg && rq_wr && rq_is_io;
+    assign vc_rd = in_reg && rq_rd && rq_is_vreg;
+    assign vc_wr = in_reg && rq_wr && rq_is_vreg;
 
     // BRAM ports
     always_ff @(posedge clk) begin
@@ -291,23 +301,23 @@ module spg2xx (
     end
     logic [1:0] bram_sel;   // 0 ram, 1 vram, 2 audio
 
-    // register read value (combinational in the accept cycle)
+    // register read value (in A_REG)
     logic [15:0] reg_rdata;
     always_comb begin
         reg_rdata = 16'd0;
-        if (is_io)       reg_rdata = io_rdata;
-        else if (is_vreg) reg_rdata = vc_rdata;
-        else if (is_dma) reg_rdata = sysdma[q_addr[1:0]];
+        if (rq_is_io)        reg_rdata = io_rdata;
+        else if (rq_is_vreg) reg_rdata = vc_rdata;
+        else if (rq_is_dma)  reg_rdata = sysdma[rq_addr[1:0]];
     end
 
     // sim hooks
     // (audio register reads complete, and are reported, a clk later)
     logic [15:0] audio_addr_q;
     assign spu_req          = go && is_audio;
-    assign dbg_io_rd        = (go && q_rd && is_logged && !is_audio && sel_cpu) || (ast == A_BRAM && audio_rd_q);
-    assign dbg_io_wr        = go && q_wr && is_logged && sel_cpu;
-    assign dbg_io_addr      = (ast == A_BRAM) ? audio_addr_q : q_addr[15:0];
-    assign dbg_io_wdata     = q_wdata;
+    assign dbg_io_rd        = (in_reg && rq_rd && rq_logged && rq_cpu) || (ast == A_BRAM && audio_rd_q);
+    assign dbg_io_wr        = (in_reg && rq_wr && rq_logged && rq_cpu) || (go && q_wr && is_audio && sel_cpu);
+    assign dbg_io_addr      = (ast == A_BRAM) ? audio_addr_q : in_reg ? rq_addr : q_addr[15:0];
+    assign dbg_io_wdata     = in_reg ? rq_wdata : q_wdata;
     assign dbg_io_rtl_rdata = (ast == A_BRAM) ? spu_rdata : reg_rdata;
 
     // ext bus: address/data latched when the access is accepted (another
@@ -350,36 +360,41 @@ module spg2xx (
                     ext_wdata <= q_wdata;
                     ast       <= A_EXT;
                 end else begin
-                    // registers / unmapped: complete now
-                    logic [15:0] v;
-                    v = reg_rdata;
-                    if (is_logged && q_rd && sim_io_override && sel_cpu) v = sim_io_rdata;
-                    complete(v);
-                    // register write side effects owned by the bus unit
-                    if (q_wr && is_dma) begin
-                        if (q_addr[1:0] != 2'd2) sysdma[q_addr[1:0]] <= q_wdata;
-                        else if (q_wdata[15:14] == 2'b00) begin
-                            dma_sprite <= 1'b0;
-                            dma_src    <= {sysdma[1][5:0], sysdma[0]};
-                            dma_dst    <= sysdma[3][13:0];
-                            dma_len    <= q_wdata;
-                            dma_j      <= 16'd0;
-                            dst        <= (q_wdata == 16'd0) ? D_IDLE : D_RD;
-                            sysdma[2]  <= 16'd0;
-                            if (q_wdata == 16'd0) begin
-                                // MAME still updates the registers
-                                sysdma[3] <= {2'd0, sysdma[3][13:0]};
-                            end
-                        end
-                    end
-                    if (q_wr && is_vreg && q_addr[7:0] == 8'h72) begin
-                        dma_sprite <= 1'b1;
-                        dma_src    <= {8'd0, vregs[8'h70][13:0]};
-                        dma_dst    <= {4'd0, vregs[8'h71][9:0]};
-                        dma_len    <= (q_wdata[9:0] != 0) ? {6'd0, q_wdata[9:0]} : 16'h400;
+                    // registers / unmapped: latch, perform next clk
+                    rq_addr  <= q_addr[15:0];
+                    rq_wdata <= q_wdata;
+                    rq_rd    <= q_rd;
+                    rq_wr    <= q_wr;
+                    rq_cpu   <= sel_cpu;
+                    ast      <= A_REG;
+                end
+            end
+            A_REG: begin
+                logic [15:0] v;
+                v = reg_rdata;
+                if (rq_logged && rq_rd && sim_io_override && rq_cpu) v = sim_io_rdata;
+                complete(v);
+                ast <= A_IDLE;
+                // register write side effects owned by the bus unit
+                if (rq_wr && rq_is_dma) begin
+                    if (rq_addr[1:0] != 2'd2) sysdma[rq_addr[1:0]] <= rq_wdata;
+                    else if (rq_wdata[15:14] == 2'b00) begin
+                        dma_sprite <= 1'b0;
+                        dma_src    <= {sysdma[1][5:0], sysdma[0]};
+                        dma_dst    <= sysdma[3][13:0];
+                        dma_len    <= rq_wdata;
                         dma_j      <= 16'd0;
-                        dst        <= D_RD;
+                        dst        <= (rq_wdata == 16'd0) ? D_IDLE : D_RD;
+                        sysdma[2]  <= 16'd0;
                     end
+                end
+                if (rq_wr && rq_is_vreg && rq_addr[7:0] == 8'h72) begin
+                    dma_sprite <= 1'b1;
+                    dma_src    <= {8'd0, vregs[8'h70][13:0]};
+                    dma_dst    <= {4'd0, vregs[8'h71][9:0]};
+                    dma_len    <= (rq_wdata[9:0] != 0) ? {6'd0, rq_wdata[9:0]} : 16'h400;
+                    dma_j      <= 16'd0;
+                    dst        <= D_RD;
                 end
             end
             A_BRAM: begin

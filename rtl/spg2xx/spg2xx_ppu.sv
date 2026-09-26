@@ -107,7 +107,7 @@ module spg2xx_ppu (
         R_PRIO,
         R_PAGE, R_TILE, R_TILE_RD, R_EX_RD,
         R_SPR, R_SPR_RD, R_SPR_SETUP,
-        R_FETCH, R_DRAW, R_DRAIN,
+        R_ADDR1, R_ADDR2, R_FETCH, R_DRAW, R_DRAIN,
         R_DONE
     } rstate_t;
     rstate_t rs /* verilator public_flat_rd */, ret;   // ret: state to resume after a strip
@@ -149,6 +149,14 @@ module spg2xx_ppu (
     logic [2:0]  s_bpp;                 // 1..4 : nc_bpp/2
     logic [5:0]  s_bpr;
     logic [11:0] s_wpt;
+
+    // strip address pipeline: row = gfx + wpt*tile + bpr*line
+    logic [21:0] m_gfx;
+    logic [15:0] m_tile;
+    logic [5:0]  m_line, m_bpr;
+    logic [11:0] m_wpt;
+    logic [27:0] prod1;
+    logic [11:0] prod2;
 
     // row buffer (pixel words of the strip's row)
     logic [15:0] rowbuf [0:31];
@@ -204,24 +212,24 @@ module spg2xx_ppu (
     assign vram_addr = vram_addr_r;
 
     // page / sprite tile-strip setup helpers
+    // latch a strip's parameters; the address is computed in R_ADDR1/2
     task automatic strip_start(input logic [21:0] gfx, input logic [15:0] t, input logic [5:0] line,
+                               input logic [6:0] th, input logic [5:0] bpr, input logic [11:0] wpt,
                                input logic fx, input logic fy, input logic bl, input logic [7:0] po,
                                input logic [8:0] dx, input rstate_t back);
-        logic [5:0]  ln;
-        logic [21:0] a;
-        ln = fy ? (line ^ (tile_h[5:0] - 6'd1)) : line;
-        a  = gfx + 22'(s_wpt) * 22'(t) + 22'(s_bpr) * 22'(ln);
-        row_addr  <= a;
+        m_gfx     <= gfx;
+        m_tile    <= t;
+        m_line    <= fy ? (line ^ (th[5:0] - 6'd1)) : line;
+        m_bpr     <= bpr;
+        m_wpt     <= wpt;
         flip_x    <= fx;
         blend     <= bl;
         pal_off   <= po;
         drawx     <= dx;
-        rb_n      <= s_bpr;
+        rb_n      <= bpr;
         rb_i      <= 6'd0;
         ret       <= back;
-        mem_req   <= 1'b1;
-        mem_addr  <= a;
-        rs        <= R_FETCH;
+        rs        <= R_ADDR1;
     endtask
 
     always_ff @(posedge clk) begin
@@ -441,34 +449,33 @@ module spg2xx_ppu (
                 s_wpt  <= 12'(((12'(ncb) * 12'(tw)) >> 4) * 12'(th));
                 n <= n + 9'd1;
                 if (draw) begin
-                    // strip_start needs s_bpr/s_wpt/tile_h: compute inline
                     logic [5:0]  bpr;
                     logic [11:0] wpt;
-                    logic [5:0]  ln;
-                    logic [21:0] a;
                     logic [7:0]  po;
                     bpr = 6'((12'(ncb) * 12'(tw)) >> 4);
                     wpt = 12'(12'(bpr) * 12'(th));
-                    ln  = attr[3] ? (sl ^ (th[5:0] - 6'd1)) : sl;
-                    a   = spr_gfx + 22'(wpt) * 22'(spr_w[0]) + 22'(bpr) * 22'(ln);
                     po  = {attr[11:8], 4'd0} & ~(8'((8'd1 << ncb) - 8'd1));
-                    row_addr <= a;
-                    flip_x   <= attr[2];
-                    blend    <= attr[14];
-                    pal_off  <= po;
-                    drawx    <= ux;
-                    npix     <= tw;
-                    rb_n     <= bpr;
-                    rb_i     <= 6'd0;
-                    ret      <= R_SPR;
-                    mem_req  <= 1'b1;
-                    mem_addr <= a;
-                    rs       <= R_FETCH;
+                    npix <= tw;
+                    strip_start(spr_gfx, spr_w[0], sl, th, bpr, wpt, attr[2], attr[3], attr[14], po, ux, R_SPR);
                 end else
                     rs <= R_SPR;
             end
 
-            // ---- strip: fetch the row's words, then draw one pixel per clk ----
+            // ---- strip: address, fetch the row's words, draw one pixel per clk ----
+            R_ADDR1: begin
+                prod1 <= 28'(m_wpt) * 28'(m_tile);
+                prod2 <= 12'(m_bpr) * 12'(m_line);
+                rs    <= R_ADDR2;
+            end
+            R_ADDR2: begin
+                logic [21:0] a;
+                a = m_gfx + prod1[21:0] + 22'(prod2);
+                row_addr <= a;
+                mem_addr <= a;
+                mem_req  <= 1'b1;
+                rs       <= R_FETCH;
+            end
+
             R_FETCH: if (mem_ack) begin
                 rowbuf[rb_i[4:0]] <= mem_rdata;
                 if (rb_i + 6'd1 == rb_n) begin
@@ -541,7 +548,7 @@ module spg2xx_ppu (
         dx = 9'(n << ({1'b0, tw_sh} + 3'd3)) - 9'(realxscroll & 9'(tile_w - 7'd1));
         npix <= tile_w;
         n    <= n + 9'd1;
-        strip_start(pg_gfx, t, tile_scanline, a[2], a[3], c[8], po, dx, R_TILE);
+        strip_start(pg_gfx, t, tile_scanline, tile_h, s_bpr, s_wpt, a[2], a[3], c[8], po, dx, R_TILE);
     endtask
 
 endmodule

@@ -220,14 +220,16 @@ module spg2xx_io (
     end
 
     // GPIO register writes that run do_gpio(write): data (redirected to
-    // buffer), buffer, dir, attr, and port C's mask.
-    function automatic logic gpio_touch(input logic [7:0] a, output int p);
-        p = 0;
-        if (a >= 8'h01 && a <= 8'h0f) begin
-            p = (int'(a) - 1) / 5;
-            return ((int'(a) - 1) % 5) != 4 || a == R_IOC_MASK;
-        end
-        return 1'b0;
+    // buffer), buffer, dir, attr, and port C's mask.  MAME also recomputes
+    // the stored data register there; reads recompute it live (gpio_read),
+    // so that value is never observed and is not kept.
+    function automatic logic gpio_touch(input logic [7:0] a, output logic [1:0] p);
+        case (a)
+            8'h01, 8'h02, 8'h03, 8'h04: begin p = 2'd0; return 1'b1; end
+            8'h06, 8'h07, 8'h08, 8'h09: begin p = 2'd1; return 1'b1; end
+            8'h0b, 8'h0c, 8'h0d, 8'h0e, 8'h0f: begin p = 2'd2; return 1'b1; end
+            default: begin p = 2'd0; return 1'b0; end
+        endcase
     endfunction
 
     // ------------------------------------------------------------------
@@ -459,18 +461,15 @@ module spg2xx_io (
 
             // ---------------- register writes ----------------
             if (wr) begin
-                int p;
+                logic [1:0] p;
                 // default path (MAME stores the value except for these strobes)
                 if (addr < 8'h80 && addr != R_TMB_CLEAR && addr != R_TA_IRQCLR && addr != R_TB_IRQCLR
                     && addr != R_WDOG_CLR && addr != R_UART_STAT && addr != R_UART_RXBUF)
                     regs[addr[6:0]] <= wdata;
                 if (gpio_touch(addr, p)) begin
                     // data writes go to the buffer register
-                    if (addr == R_IOA_DATA || addr == 8'h06 || addr == 8'h0b) begin
+                    if (addr == R_IOA_DATA || addr == 8'h06 || addr == 8'h0b)
                         regs[addr[6:0] + 7'd1] <= wdata;
-                        regs[addr[6:0]]        <= gpio_data_after_write(p, addr + 8'd1, wdata);
-                    end else
-                        regs[5 * p + 1] <= gpio_data_after_write(p, addr, wdata);
                     port_wr[p] <= 1'b1;
                 end
                 case (addr)
@@ -563,18 +562,6 @@ module spg2xx_io (
             end
         end
     end
-
-    // do_gpio(write): the data register becomes the driven value plus the
-    // special-function bits (inputs are not sampled on writes)
-    function automatic logic [15:0] gpio_data_after_write(input int p, input logic [7:0] a, input logic [15:0] v);
-        logic [15:0] buffer, dir, attr, special, w;
-        buffer  = (a == 8'(5 * p + 2)) ? v : regs[5 * p + 2];
-        dir     = (a == 8'(5 * p + 3)) ? v : regs[5 * p + 3];
-        attr    = (a == 8'(5 * p + 4)) ? v : regs[5 * p + 4];
-        special = (a == 8'(5 * p + 5)) ? v : regs[5 * p + 5];
-        w = (buffer ^ (dir & ~attr)) & ~special;
-        return (w & dir) | gpio_special(p);
-    endfunction
 
     task automatic adc_done;
         adc_data    <= 16'h8fff;          // (0x0FFF & 0x0FFF) | 0x8000

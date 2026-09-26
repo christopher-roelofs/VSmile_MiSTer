@@ -135,7 +135,7 @@ module spg2xx_spu (
     typedef enum logic [4:0] {
         E_IDLE, E_CMD, E_CMD_LOAD, E_CMD_APPLY,
         E_TICK, E_CH, E_LOAD, E_ADV, E_FETCH, E_RD_HDR, E_RD_RAW, E_FETCH2,
-        E_MIX1, E_MIX2, E_MIX3, E_ENV, E_ENV_RD, E_WB, E_OUT
+        E_MIX1, E_MIX1B, E_MIX2, E_MIX3, E_MIX3B, E_ENV, E_ENV_RD, E_WB, E_OUT, E_OUT2
     } estate_t;
     estate_t es;
 
@@ -144,6 +144,9 @@ module spg2xx_spu (
     logic [2:0]  wi;                      // write-back index
     logic        load_cmd;                // E_LOAD returns to E_CMD_APPLY
     logic signed [31:0] ms;               // mixer pipeline sample
+    logic signed [31:0] mp, mq;           // mixer partial products
+    logic signed [31:0] pan_l, pan_r;
+    logic signed [31:0] ml, mr;
     logic [2:0]  nfetch;                  // samples still to fetch this tick
     logic        playing;
     logic [15:0] raw;
@@ -478,36 +481,43 @@ module spg2xx_spu (
             end
 
             // MAME sound_stream_update, per channel, in three stages
-            E_MIX1: begin   // interpolation
+            E_MIX1: begin   // interpolation: the two products
                 logic signed [31:0] sm, p, lerp;
-                sm = 32'(signed'(w[C_WDATA] ^ 16'h8000));
-                if (!x[X_CONTROL][9]) begin
-                    lerp = $signed({24'd0, acc[ch][18:11]});
-                    p  = 32'(signed'(w[C_WDATA_PREV] ^ 16'h8000));
-                    p  = (p * (32'sd256 - lerp)) >>> 8;
-                    sm = ((sm * lerp) >>> 8) + p;
-                end
-                ms <= sm;
+                sm   = 32'(signed'(w[C_WDATA] ^ 16'h8000));
+                p    = 32'(signed'(w[C_WDATA_PREV] ^ 16'h8000));
+                lerp = x[X_CONTROL][9] ? 32'sd256 : $signed({24'd0, acc[ch][18:11]});
+                mp <= p * (32'sd256 - lerp);
+                mq <= sm * lerp;
+                es <= E_MIX1B;
+            end
+            E_MIX1B: begin
+                ms <= (mq >>> 8) + (mp >>> 8);
                 es <= E_MIX2;
             end
-            E_MIX2: begin   // envelope level
-                ms <= (ms * $signed({25'd0, w_edd})) >>> 7;
-                es <= E_MIX3;
-            end
-            E_MIX3: begin   // pan / volume, accumulate
-                logic signed [31:0] pl, pr, vol, pan, s16;
+            E_MIX2: begin   // envelope level; pan factors
+                logic signed [31:0] vol, pan;
+                ms  <= (ms * $signed({25'd0, w_edd})) >>> 7;
                 vol = $signed({25'd0, w[C_PAN_VOL][6:0]});
                 pan = $signed({25'd0, w[C_PAN_VOL][14:8]});
                 if (pan < 32'sd64) begin
-                    pl = 32'sd127 * vol;
-                    pr = pan * 32'sd2 * vol;
+                    pan_l <= 32'sd127 * vol;
+                    pan_r <= pan * 32'sd2 * vol;
                 end else begin
-                    pl = (32'sd127 - pan) * 32'sd2 * vol;
-                    pr = 32'sd127 * vol;
+                    pan_l <= (32'sd127 - pan) * 32'sd2 * vol;
+                    pan_r <= 32'sd127 * vol;
                 end
+                es <= E_MIX3;
+            end
+            E_MIX3: begin   // pan / volume products
+                logic signed [31:0] s16;
                 s16 = 32'(signed'(ms[15:0]));
-                mix_l <= mix_l + ((s16 * 32'(signed'(pl[15:0]))) >>> 14);
-                mix_r <= mix_r + ((s16 * 32'(signed'(pr[15:0]))) >>> 14);
+                mp <= s16 * 32'(signed'(pan_l[15:0]));
+                mq <= s16 * 32'(signed'(pan_r[15:0]));
+                es <= E_MIX3B;
+            end
+            E_MIX3B: begin  // accumulate
+                mix_l <= mix_l + (mp >>> 14);
+                mix_r <= mix_r + (mq >>> 14);
                 es <= E_ENV;
             end
 
@@ -590,8 +600,14 @@ module spg2xx_spu (
                 if (x[X_WIN_R] != 0) r = r + 32'(x[X_WIN_R]) - 32'sd32768;
                 if (x[X_CONTROL][7:6] == 2'd0) begin l = l >>> 4; r = r >>> 4; end
                 else                            begin l = l >>> 2; r = r >>> 2; end
-                l = (l * 32'(signed'(x[X_MAINVOL]))) >>> 7;
-                r = (r * 32'(signed'(x[X_MAINVOL]))) >>> 7;
+                ml <= l;
+                mr <= r;
+                es <= E_OUT2;
+            end
+            E_OUT2: begin
+                logic signed [31:0] l, r;
+                l = (ml * 32'(signed'(x[X_MAINVOL]))) >>> 7;
+                r = (mr * 32'(signed'(x[X_MAINVOL]))) >>> 7;
                 out_l <= l[15:0];
                 out_r <= r[15:0];
                 out_strobe <= 1'b1;
