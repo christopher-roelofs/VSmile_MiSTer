@@ -48,10 +48,21 @@ module spg2xx (
     input  logic [1:0]  extint,
     input  logic [1:0]  extint_evt,
 
-    // video timing
+    // audio (70312.5 Hz)
+    output logic signed [15:0] audio_l,
+    output logic signed [15:0] audio_r,
+    output logic        audio_strobe,
+
+    // video timing and pixel output
     output logic [8:0]  vpos,
     output logic [8:0]  hpos,
     output logic        vblank,
+    input  logic [8:0]  out_x,
+    output logic [14:0] out_rgb,
+    output logic [23:0] out_rgb888,
+    output logic        line_done,
+    output logic [7:0]  done_y,
+    output logic        ppu_overrun,
 
     // simulation hooks
     input  logic        sim_io_override,
@@ -128,14 +139,33 @@ module spg2xx (
 
     logic        spr_dma_done;
     logic [15:0] vregs [0:255];
+    logic        line_start, last_line;
 
     spg2xx_vctl vctl (
         .clk, .reset, .ce, .pal, .mame_timing,
         .addr(reg_off), .rd(vc_rd), .wr(vc_wr), .wdata(reg_wdata), .rdata(vc_rdata),
         .spr_dma_start(), .spr_dma_src(), .spr_dma_dst(), .spr_dma_len(),
         .spr_dma_done,
-        .vpos, .hpos, .vblank, .irq(irq_video),
+        .vpos, .hpos, .vblank, .line_start, .last_line, .irq(irq_video),
         .regs(vregs)
+    );
+
+    // ------------------------------------------------------------------
+    // PPU
+    // ------------------------------------------------------------------
+    logic        ppu_mem_req, ppu_mem_ack;
+    logic [21:0] ppu_mem_addr;
+    logic [15:0] ppu_mem_rdata;
+    logic [10:0] ppu_vram_addr;
+    logic [15:0] ppu_vram_q;
+
+    spg2xx_ppu ppu (
+        .clk, .reset,
+        .regs(vregs), .line_start, .line_vpos(vpos), .last_line,
+        .mem_req(ppu_mem_req), .mem_addr(ppu_mem_addr), .mem_ack(ppu_mem_ack), .mem_rdata(ppu_mem_rdata),
+        .vram_addr(ppu_vram_addr), .vram_q(ppu_vram_q),
+        .out_x, .out_rgb, .out_rgb888,
+        .line_done, .done_y, .overrun(ppu_overrun)
     );
 
     always_ff @(posedge clk) begin
@@ -152,11 +182,11 @@ module spg2xx (
     // MAME input lines: 0 FIQ, 1..8 IRQ0..IRQ7
     always_comb begin
         soc_irq    = 9'd0;
-        soc_irq[0] = irq_video && video_to_fiq;     // + audio channel IRQ (TODO)
+        soc_irq[0] = (irq_video && video_to_fiq) || spu_fiq;
         soc_irq[1] = irq_video && !video_to_fiq;
         soc_irq[3] = irq_timer;
         soc_irq[4] = irq_uart_adc;
-        soc_irq[5] = 1'b0;                          // audio IRQ (TODO)
+        soc_irq[5] = spu_irq;
         soc_irq[6] = irq_ext;
         soc_irq[7] = irq_hifreq;
         soc_irq[8] = irq_lofreq;
@@ -167,10 +197,27 @@ module spg2xx (
     // Memories (single port each, owned by the bus unit for now; the PPU
     // and SPU will get second ports)
     // ------------------------------------------------------------------
-    logic [15:0] ram  [0:10239];    // 0000-27FF
-    logic [15:0] vram [0:2047];     // 2800-2FFF (2900-2FFF used)
-    logic [15:0] aram [0:2047];     // 3000-37FF audio registers (stub)
-    logic [15:0] ram_q, vram_q, aram_q;
+    logic [15:0] ram  [0:10239] /* verilator public_flat_rd */;    // 0000-27FF
+    logic [15:0] vram [0:2047]  /* verilator public_flat_rd */;    // 2800-2FFF (2900-2FFF used)
+    logic [15:0] ram_q, vram_q;
+
+    // ------------------------------------------------------------------
+    // SPU (3000-37FF)
+    // ------------------------------------------------------------------
+    logic        spu_req, spu_ack, spu_idle, spu_irq, spu_fiq;
+    logic [15:0] spu_rdata;
+    logic        spu_mem_req, spu_mem_ack;
+    logic [21:0] spu_mem_addr;
+    logic [15:0] spu_mem_rdata;
+
+    spg2xx_spu spu (
+        .clk, .reset, .ce,
+        .req(spu_req), .we(q_wr), .addr(q_addr[10:0]), .wdata(q_wdata),
+        .ack(spu_ack), .rdata(spu_rdata), .idle(spu_idle),
+        .mem_req(spu_mem_req), .mem_addr(spu_mem_addr), .mem_ack(spu_mem_ack), .mem_rdata(spu_mem_rdata),
+        .irq(spu_irq), .fiq(spu_fiq),
+        .out_l(audio_l), .out_r(audio_r), .out_strobe(audio_strobe)
+    );
 
     // ------------------------------------------------------------------
     // Bus unit: one access at a time for the CPU or a DMA engine
@@ -189,18 +236,29 @@ module spg2xx (
     logic        dma_wait;
     logic [15:0] sysdma [0:3];
 
-    // current requester
+    // current requester: real-time units first (SPU > PPU), then DMA, then CPU
     wire         dma_active = (dst != D_IDLE);
     wire         dma_skip   = dma_sprite && (dst == D_WR) && ({6'd0, dma_dst} + {6'd0, dma_j[9:0]} >= 16'h400);
-    wire [21:0]  q_addr  = !dma_active ? cpu_addr
+    wire         sel_spu = spu_mem_req && !spu_mem_ack;
+    wire         sel_ppu = !sel_spu && ppu_mem_req && !ppu_mem_ack;
+    wire         sel_rt  = sel_spu || sel_ppu;
+    wire         sel_dma = !sel_rt && dma_active;
+    wire         sel_cpu = !sel_rt && !dma_active;
+    wire [21:0]  q_addr  = sel_spu ? spu_mem_addr
+                         : sel_ppu ? ppu_mem_addr
+                         : !dma_active ? cpu_addr
                          : (dst == D_RD) ? dma_src + 22'(dma_j)
                          : dma_sprite ? 22'h2c00 + 22'(dma_dst) + 22'(dma_j[9:0])
                          : {8'd0, 14'(dma_dst + dma_j[13:0])};
-    wire         q_rd    = !dma_active ? cpu_rd : (dst == D_RD);
-    wire         q_wr    = !dma_active ? cpu_wr : (dst == D_WR);
+    wire         q_rd    = sel_rt ? 1'b1 : !dma_active ? cpu_rd : (dst == D_RD);
+    wire         q_wr    = sel_rt ? 1'b0 : !dma_active ? cpu_wr : (dst == D_WR);
     wire [15:0]  q_wdata = !dma_active ? cpu_wdata : dma_data;
-    wire         q_valid = !dma_active ? ((cpu_rd || cpu_wr) && !cpu_done)
-                                       : (!dma_wait && (dst == D_RD || (dst == D_WR && !dma_skip)));
+    wire         q_want  = sel_rt ? 1'b1
+                         : sel_cpu ? ((cpu_rd || cpu_wr) && !cpu_done)
+                         : (!dma_wait && (dst == D_RD || (dst == D_WR && !dma_skip)));
+    // audio registers are only accessed while the SPU engine is idle; they
+    // then complete in one clk
+    wire         q_valid = q_want && !(is_audio && !spu_idle);
     wire         go      = (ast == A_IDLE) && q_valid;
 
     // address decode
@@ -226,10 +284,9 @@ module spg2xx (
     always_ff @(posedge clk) begin
         if (go && q_wr && is_ram)   ram[q_addr[13:0]]   <= q_wdata;
         if (go && q_wr && is_vram)  vram[q_addr[10:0]]  <= q_wdata;
-        if (go && q_wr && is_audio) aram[q_addr[10:0]]  <= q_wdata;
         ram_q  <= ram[q_addr[13:0] < 14'h2800 ? q_addr[13:0] : 14'd0];
         vram_q <= vram[q_addr[10:0]];
-        aram_q <= aram[q_addr[10:0]];
+        ppu_vram_q <= vram[ppu_vram_addr];
     end
     logic [1:0] bram_sel;   // 0 ram, 1 vram, 2 audio
 
@@ -243,17 +300,19 @@ module spg2xx (
     end
 
     // sim hooks
-    assign dbg_io_rd        = go && q_rd && is_logged && !dma_active;
-    assign dbg_io_wr        = go && q_wr && is_logged && !dma_active;
-    assign dbg_io_addr      = q_addr[15:0];
+    // (audio register reads complete, and are reported, a clk later)
+    logic [15:0] audio_addr_q;
+    assign spu_req          = go && is_audio;
+    assign dbg_io_rd        = (go && q_rd && is_logged && !is_audio && sel_cpu) || (ast == A_BRAM && audio_rd_q);
+    assign dbg_io_wr        = go && q_wr && is_logged && sel_cpu;
+    assign dbg_io_addr      = (ast == A_BRAM) ? audio_addr_q : q_addr[15:0];
     assign dbg_io_wdata     = q_wdata;
-    assign dbg_io_rtl_rdata = reg_rdata;    // audio registers: not modelled yet
+    assign dbg_io_rtl_rdata = (ast == A_BRAM) ? spu_rdata : reg_rdata;
 
-    // ext bus
-    assign ext_addr  = q_addr;
-    assign ext_wdata = q_wdata;
+    // ext bus: address/data latched when the access is accepted (another
+    // requester may be selected while it is in flight)
 
-    logic        owner_dma;
+    logic [1:0]  owner;             // 0 CPU, 1 DMA, 2 SPU, 3 PPU
     logic        dma_ack;
     logic [15:0] acc_data;
     logic        audio_rd_q;     // audio read being overridden
@@ -262,6 +321,8 @@ module spg2xx (
         dma_ack      <= 1'b0;
         spr_dma_done <= 1'b0;
         cpu_done     <= 1'b0;
+        spu_mem_ack  <= 1'b0;
+        ppu_mem_ack  <= 1'b0;
 
         if (reset) begin
             ast      <= A_IDLE;
@@ -274,21 +335,24 @@ module spg2xx (
 
             case (ast)
             A_IDLE: if (go) begin
-                owner_dma <= dma_active;
-                if (dma_active) dma_wait <= 1'b1;
+                owner <= sel_spu ? 2'd2 : sel_ppu ? 2'd3 : sel_dma ? 2'd1 : 2'd0;
+                if (sel_dma) dma_wait <= 1'b1;
                 if (is_bram) begin
-                    bram_sel   <= is_ram ? 2'd0 : is_vram ? 2'd1 : 2'd2;
-                    audio_rd_q <= is_audio && q_rd && sim_io_override && !dma_active;
-                    ast        <= A_BRAM;
+                    bram_sel     <= is_ram ? 2'd0 : is_vram ? 2'd1 : 2'd2;
+                    audio_rd_q   <= is_audio && q_rd && sel_cpu;
+                    audio_addr_q <= q_addr[15:0];
+                    ast          <= A_BRAM;
                 end else if (is_ext) begin
-                    ext_req <= 1'b1;
-                    ext_wr  <= q_wr;
-                    ast     <= A_EXT;
+                    ext_req   <= 1'b1;
+                    ext_wr    <= q_wr;
+                    ext_addr  <= q_addr;
+                    ext_wdata <= q_wdata;
+                    ast       <= A_EXT;
                 end else begin
                     // registers / unmapped: complete now
                     logic [15:0] v;
                     v = reg_rdata;
-                    if (is_logged && q_rd && sim_io_override && !dma_active) v = sim_io_rdata;
+                    if (is_logged && q_rd && sim_io_override && sel_cpu) v = sim_io_rdata;
                     complete(v);
                     // register write side effects owned by the bus unit
                     if (q_wr && is_dma) begin
@@ -319,8 +383,8 @@ module spg2xx (
             end
             A_BRAM: begin
                 logic [15:0] v;
-                v = (bram_sel == 2'd0) ? ram_q : (bram_sel == 2'd1) ? vram_q : aram_q;
-                if (audio_rd_q) v = sim_io_rdata;
+                v = (bram_sel == 2'd0) ? ram_q : (bram_sel == 2'd1) ? vram_q : spu_rdata;
+                if (audio_rd_q && sim_io_override) v = sim_io_rdata;
                 complete(v);
                 ast <= A_IDLE;
             end
@@ -360,18 +424,15 @@ module spg2xx (
 
     // access completion: to the CPU or to the DMA engine
     task automatic complete(input logic [15:0] v);
-        if (owner_dma_now()) begin
-            dma_ack  <= 1'b1;
-            acc_data <= v;
-        end else begin
-            cpu_done  <= 1'b1;
-            cpu_rdata <= v;
-        end
+        logic [1:0] o;
+        // in A_IDLE the owner is the current requester; afterwards latched
+        o = (ast == A_IDLE) ? (sel_spu ? 2'd2 : sel_ppu ? 2'd3 : sel_dma ? 2'd1 : 2'd0) : owner;
+        case (o)
+            2'd3: begin ppu_mem_ack <= 1'b1; ppu_mem_rdata <= v; end
+            2'd2: begin spu_mem_ack <= 1'b1; spu_mem_rdata <= v; end
+            2'd1: begin dma_ack     <= 1'b1; acc_data      <= v; end
+            default: begin cpu_done <= 1'b1; cpu_rdata     <= v; end
+        endcase
     endtask
-
-    // In A_IDLE the owner is the current requester; afterwards it is latched.
-    function automatic logic owner_dma_now();
-        return (ast == A_IDLE) ? dma_active : owner_dma;
-    endfunction
 
 endmodule

@@ -35,10 +35,12 @@ module spg2xx_vctl (
     output logic [8:0]  vpos,
     output logic [8:0]  hpos,
     output logic        vblank,
+    output logic        line_start,     // one clk, vpos holds the new line
+    output logic        last_line,      // vpos is the frame's last line
     output logic        irq,            // to IRQ0 or FIQ (FIQ select)
 
     // register file for the renderer
-    output logic [15:0] regs [0:255]
+    output logic [15:0] regs [0:255] /* verilator public_flat_rd */
 );
 
     logic [15:0] irq_en, irq_st;   // 0x62 / 0x63
@@ -56,13 +58,17 @@ module spg2xx_vctl (
     logic [10:0] hacc;         // hpos fraction: hpos = hcnt * 320 / line_len
     logic        pos_hit;
 
+    assign last_line = (vpos == num_lines - 9'd1);
+
     always_ff @(posedge clk) begin
-        pos_hit <= 1'b0;
+        pos_hit    <= 1'b0;
+        line_start <= 1'b0;
         if (reset) begin
             hcnt <= 0; hacc <= 0; hpos <= 0; vpos <= 9'd240; vblank <= 1'b1; lfrac <= 0;
         end else if (ce) begin
             if (hcnt == line_len - 11'd1) begin
                 hcnt <= 0; hacc <= 0; hpos <= 0;
+                line_start <= 1'b1;
                 lfrac <= long_line ? lfrac + 9'd146 - 9'd262 : lfrac + 9'd146;
                 if (vpos == num_lines - 9'd1) vpos <= 0;
                 else                          vpos <= vpos + 9'd1;

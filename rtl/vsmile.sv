@@ -33,9 +33,19 @@ module vsmile (
     input  logic [3:0]  colors,         // green, blue, yellow, red
     input  logic [3:0]  buttons,        // ok, quit, help, abc
 
+    output logic signed [15:0] audio_l,
+    output logic signed [15:0] audio_r,
+    output logic        audio_strobe,
+
     output logic [8:0]  vpos,
     output logic [8:0]  hpos,
     output logic        vblank,
+    input  logic [8:0]  out_x,
+    output logic [14:0] out_rgb,
+    output logic [23:0] out_rgb888,
+    output logic        line_done,
+    output logic [7:0]  done_y,
+    output logic        ppu_overrun,
 
     // simulation hooks (see spg2xx)
     input  logic        sim_io_override,
@@ -60,7 +70,7 @@ module vsmile (
     logic        ext_req, ext_wr, ext_ack;
     logic [21:0] ext_addr;
     logic [15:0] ext_wdata, ext_rdata;
-    logic [1:0]  cs_mode;
+    logic [1:0]  cs_mode /* verilator public_flat_rd */;
     logic [15:0] portb_out, portc_out, portb_oe, portc_oe;
     logic [2:0]  port_wr;
     logic        uart_tx_valid, uart_rx_valid;
@@ -100,7 +110,9 @@ module vsmile (
         .porta_oe(), .portb_oe, .portc_oe, .port_wr,
         .uart_tx_valid, .uart_tx_data, .uart_rx_valid, .uart_rx_data,
         .extint(ctrl_rts), .extint_evt(ctrl_rts_evt),
+        .audio_l, .audio_r, .audio_strobe,
         .vpos, .hpos, .vblank,
+        .out_x, .out_rgb, .out_rgb888, .line_done, .done_y, .ppu_overrun,
         .sim_io_override, .sim_io_rdata, .sim_irq_override, .sim_irq,
         .dbg_io_rd, .dbg_io_wr, .dbg_io_addr, .dbg_io_wdata, .dbg_io_rtl_rdata, .soc_irq,
         .dbg_fetch, .dbg_pc, .dbg_op, .dbg_r, .dbg_illegal, .dbg_irq_ack, .dbg_irq_ack_line
@@ -109,7 +121,7 @@ module vsmile (
     // cart cs2 (MAME vsmile_state::portb_w -> set_cs2(!bit1)) and controller
     // selects (portc_w bits 8/9), latched when the port is written with the
     // bit configured as an output
-    logic cs2;
+    logic cs2 /* verilator public_flat_rd */;
     always_ff @(posedge clk) begin
         if (reset) begin
             cs2         <= 1'b0;

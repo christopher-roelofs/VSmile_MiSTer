@@ -21,6 +21,7 @@ for d in "$@"; do
     else
         fail=$((fail + 1)); printf 'FAIL  %s\n' "$name"; grep -A4 'MISMATCH\|illegal' "$o" | sed 's/^/      /'
     fi
+    grep '^video:' "$o" | sed 's/^/      /'
     awk '/^SoC register reads/{f=1;next} f && $1 ~ /^[0-9A-F]{4}$/ && $1 !~ /^3[0-7]/ && $3 != "-" {print "      reg " $0}' "$o"
 done
 rm -rf "$tmp"

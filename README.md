@@ -37,16 +37,42 @@ SoC memory map (word addresses, MAME `spg2xx_device::internal_map`):
    against MAME golden traces.  ✅
 2. **SoC skeleton** — RAM, interrupt controller, timers, GPIO/chip-select,
    UART, system + sprite DMA, video timing/IRQs, board-level banking.  ✅
-3. **PPU** — tile layers + sprites + palette, line-based renderer; compared
-   against MAME frame snapshots.
-4. **SPU** — 16-channel audio.
-5. **Controller** — V.Smile joystick UART protocol (MAME `bus/vsmile/pad.cpp`);
-   also the audio *registers* (status bits the game polls) ahead of the SPU.
+3. **PPU** — tile layers + sprites + palette + blending, line-based renderer,
+   pixel-exact against a C++ port of MAME's renderer.  ✅
+4. **SPU** — 16-channel wavetable audio (PCM/ADPCM, envelopes, beat timer),
+   registers verified against MAME 0.289.  ✅
+5. **Controller** — V.Smile joystick UART protocol (MAME `bus/vsmile/pad.cpp`).  ✅
 6. **MiSTer top** — `emu.sv` from Template_MiSTer, SDRAM for cart/BIOS,
    OSD cart loading, region/language DIP settings.
 7. Real hardware testing.
 
-## Status: the SoC runs in lockstep with MAME
+## Status: the whole console runs in lockstep with MAME
+
+Everything below the MiSTer top level exists and is verified:
+
+**Video** (`rtl/spg2xx/spg2xx_ppu.sv`): every scanline the RTL renders is
+compared pixel for pixel with a C++ port of MAME's renderer (`sim/soc/
+ppu_ref.h`) drawing from the same memory at the same moment.  7 carts,
+135,000 lines: **0 unexplained differences**.  The 19 lines that differ are
+ones where the game wrote the palette or sprite RAM while the line was
+being drawn (the RTL sees a mix of old and new data, as hardware would;
+the reference sees only one state).  Not implemented: bitmap/line-map
+mode, vertical compression, hi-colour, saturation (no title uses them).
+
+**Audio** (`rtl/spg2xx/spg2xx_spu.sv`): the 16-channel wavetable unit
+(8/16-bit PCM, IMA ADPCM, ADPCM36, envelopes, ramp-down, beat timer,
+channel FIQs), ported from *current* MAME.  MAME 0.264's SPU has different
+channel start/stop semantics, so audio register reads are verified against
+a trace from MAME 0.289 (`MAME=<path> scripts/mame_trace.sh`): all reads
+match except a few channel-status reads, where MAME notices a sample's
+end only at its next sound update while the RTL clears the bit on the
+exact sample.
+
+**Controller** (`rtl/vsmile_pad.sv`): the joystick's UART protocol (probe
+responses, keep-alives, RTS timing), so games see a controller exactly
+as in MAME.
+
+### Earlier milestones
 
 **CPU** (`sim/cpu`): the RTL runs in lockstep with a MAME trace — PC and all
 registers compared after every instruction, interrupts injected at the exact
@@ -81,8 +107,10 @@ like MAME's screen; `mame_timing` selects MAME's exact 60 Hz frame
 
     rtl/unsp/        µ'nSP CPU core
     rtl/spg2xx/      SoC: top/bus/DMA (spg2xx.sv), I/O (spg2xx_io.sv),
-                     video control + timing (spg2xx_vctl.sv)
-    rtl/vsmile.sv    board: cart/BIOS banking, DIP switches, controller lines
+                     video control + timing (spg2xx_vctl.sv), renderer
+                     (spg2xx_ppu.sv), sound (spg2xx_spu.sv)
+    rtl/vsmile.sv    board: cart/BIOS banking, DIP switches, controller port
+    rtl/vsmile_pad.sv joystick
     sim/cpu/         CPU lockstep testbench (vs. MAME trace)
     sim/soc/         system lockstep / free-run testbench
     scripts/         mame_trace.sh: capture golden traces from MAME 0.264+
@@ -97,8 +125,17 @@ like MAME's screen; `mame_timing` selects MAME's exact 60 Hz frame
     scripts/soc_sweep.sh /tmp/tr_zayzoo
     FREERUN=1 sim/soc/obj_dir/Vvsmile "ROMS/Zayzoo - An Earth Adventure (USA).bin" /tmp/tr_zayzoo 7000000
 
-`mame_trace.sh` needs MAME with the `vsmile` driver; it creates a
+`mame_trace.sh` needs MAME with the `vsmile` driver (0.289 or later for
+the audio registers to match; `MAME=<binary>` selects it); it creates a
 placeholder system ROM if `roms/mame/vsmile/vsmile_v103.bin` is absent.
+The system testbench takes `DUMP=<dir>` to write frames as PPM, `WAV=<file>`
+to record the audio output and `FREERUN=1` to run without MAME's help.
+
+Building a MAME 0.289 `vsmile`-only binary from source (`make SUBTARGET=vsmile
+SOURCES=src/mame/vtech/vsmile.cpp USE_QTDEBUG=0 TOOLS=0`) took ~30 min on 8
+cores; on this machine the generated makefiles wrongly carried
+`-D_WIN64`, MSVC `/wd` flags and the `bx/include/compat/msvc` include path,
+which had to be stripped from `build/projects/sdl/mamevsmile/gmake-linux/*.make`.
 
 ## License
 

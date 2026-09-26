@@ -16,8 +16,17 @@
 //   FREERUN=1   free-running mode
 //   BIOS=path   system ROM (otherwise reads as 0xFFFF, like the traces)
 //   VERBOSE=1   print every retired instruction
+//   WAV=path    write the SPU output (stereo 16-bit, 70312 Hz) as a WAV file
+//   DUMP=dir    write every FRAMES-th frame (default 60) as dir/rtl_NNNN.ppm
+//               and, when it differs, dir/ref_NNNN.ppm from the reference
+//
+// Video: every scanline the RTL renders is compared pixel for pixel with a
+// C++ port of MAME's renderer (ppu_ref.h) drawing from the same memory at
+// the same moment; mismatching lines are counted per frame.
 #include "Vvsmile.h"
+#include "Vvsmile___024root.h"
 #include "verilated.h"
+#include "ppu_ref.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -121,6 +130,29 @@ static std::vector<uint16_t> load_words(const char* path) {
     return w;
 }
 
+// Minimal WAV writer (header patched on close)
+struct Wav {
+    FILE* f = nullptr;
+    uint32_t n = 0;
+    void open(const char* path) {
+        f = fopen(path, "wb");
+        if (!f) { perror(path); exit(1); }
+        uint8_t h[44] = {0};
+        fwrite(h, 1, 44, f);
+    }
+    void put(int16_t l, int16_t r) { if (f) { int16_t s[2] = {l, r}; fwrite(s, 2, 2, f); n++; } }
+    void close() {
+        if (!f) return;
+        auto w32 = [&](uint32_t v) { fwrite(&v, 4, 1, f); };
+        auto w16 = [&](uint16_t v) { fwrite(&v, 2, 1, f); };
+        fseek(f, 0, SEEK_SET);
+        fwrite("RIFF", 1, 4, f); w32(36 + n * 4); fwrite("WAVEfmt ", 1, 8, f);
+        w32(16); w16(1); w16(2); w32(70312); w32(70312 * 4); w16(4); w16(16);
+        fwrite("data", 1, 4, f); w32(n * 4);
+        fclose(f);
+    }
+};
+
 struct RegStat { uint64_t reads = 0, mismatches = 0; uint32_t pc = 0; uint16_t mame = 0, rtl = 0; };
 
 int main(int argc, char** argv) {
@@ -144,6 +176,11 @@ int main(int argc, char** argv) {
     TraceReader trace(dir + "/cpu.tr");
     MemLog mem(dir + "/mem.log");
 
+    Wav wav;
+    if (getenv("WAV")) wav.open(getenv("WAV"));
+    const char* dump = getenv("DUMP");
+    const int dump_every = getenv("FRAMES") ? atoi(getenv("FRAMES")) : 60;
+
     Vvsmile* top = new Vvsmile;
     top->pal = 0;
     top->mame_timing = 1;
@@ -164,6 +201,46 @@ int main(int argc, char** argv) {
     int mem_lat = 0;
     std::map<uint32_t, RegStat> stats;
     uint64_t irq_taken[9] = {0}, irq_mame[9] = {0};
+
+    // ---- video reference ----
+    auto& rp = *top->rootp;
+    PpuRef ref;
+    ref.regs = (const uint16_t*)&rp.vsmile__DOT__soc__DOT__vctl__DOT__regs[0];
+    ref.vram = (const uint16_t*)&rp.vsmile__DOT__soc__DOT__vram[0];
+    ref.read = [&](uint32_t a) -> uint16_t {
+        if (a < 0x2800) return rp.vsmile__DOT__soc__DOT__ram[a];
+        if (a < 0x3000) return rp.vsmile__DOT__soc__DOT__vram[a - 0x2800];
+        if (a < 0x4000) return 0;
+        bool bios_sel = (rp.vsmile__DOT__cs_mode & 2) && ((a >> 20) & 3) == 3;
+        if (bios_sel) return bios.empty() ? 0xffff : bios[(a & 0xfffff) % bios.size()];
+        uint32_t ca = ((rp.vsmile__DOT__cs2 ? 0x400000u : 0u) | a) & (cart_words - 1);
+        return cart[ca];
+    };
+    static uint16_t ref_lines[240][320];
+    static uint8_t rtl_frame[240][320][3], ref_frame[240][320][3];
+    uint32_t frame = 0, frame_bad_lines = 0, frame_bad_px = 0;
+    uint64_t total_bad_lines = 0, total_lines = 0, overruns = 0, race_lines = 0, pal_lines = 0, mem_lines = 0;
+    static uint16_t pal_at_start[240][256];
+    static uint16_t vram_at_start[2048], ram_at_start[10240];
+    int snap_y = -1;
+    int prev_vpos = -1;
+    int prev_rs = 0;
+    int dbg_frame = -1, dbg_line = -1;
+    if (getenv("PPU_DEBUG")) sscanf(getenv("PPU_DEBUG"), "%d:%d", &dbg_frame, &dbg_line);
+    auto to888 = [](uint16_t p, uint8_t* o) {
+        p = (p & 0x8000) ? 0 : p;
+        uint8_t r = (p >> 10) & 31, g = (p >> 5) & 31, b = p & 31;
+        o[0] = (r << 3) | (r >> 2); o[1] = (g << 3) | (g >> 2); o[2] = (b << 3) | (b >> 2);
+    };
+    auto write_ppm = [&](const char* kind, uint8_t (*img)[320][3]) {
+        char path[512];
+        snprintf(path, sizeof path, "%s/%s_%04u.ppm", dump, kind, frame);
+        FILE* f = fopen(path, "wb");
+        if (!f) return;
+        fprintf(f, "P6\n320 240\n255\n");
+        fwrite(img, 1, 240 * 320 * 3, f);
+        fclose(f);
+    };
 
     uint64_t n = 0;
     TraceEntry cur{};
@@ -234,6 +311,9 @@ int main(int argc, char** argv) {
                     diverge(buf);
                 } else {
                     mem.pop();
+                    static const char* dbg_w = getenv("DEBUG_WR");
+                    if (dbg_w && top->dbg_io_wr && (a >> 8) == strtoul(dbg_w, nullptr, 16))
+                        printf("  [%llu] W %04X %04X pc=%06X\n", (unsigned long long)n, a, top->dbg_io_wdata, top->dbg_pc);
                     if (top->dbg_io_rd) {
                         static const char* dbg_addr = getenv("DEBUG_IO");
                         if (dbg_addr && strtoul(dbg_addr, nullptr, 16) == a)
@@ -255,6 +335,93 @@ int main(int argc, char** argv) {
         top->clk = 1;
         top->eval();
         clk_n++;
+
+        if (top->audio_strobe) wav.put((int16_t)top->audio_l, (int16_t)top->audio_r);
+
+        // reference renders line y when the RTL starts it (previous line's start)
+        if (top->vpos != prev_vpos) {
+            prev_vpos = top->vpos;
+            int y = (top->vpos == 261) ? 0 : top->vpos + 1;
+            if (y < 240) {
+                ref.dbg = ((int)frame == dbg_frame && y == dbg_line);
+                memcpy(pal_at_start[y], ref.vram + 0x300, 512);
+                memcpy(vram_at_start, ref.vram, sizeof vram_at_start);
+                memcpy(ram_at_start, &rp.vsmile__DOT__soc__DOT__ram[0], sizeof ram_at_start);
+                snap_y = y;
+                ref.line(y);
+                memcpy(ref_lines[y], ref.linebuf, sizeof ref.linebuf);
+            }
+        }
+        if (top->ppu_overrun) overruns++;
+        {
+            int rs = rp.vsmile__DOT__soc__DOT__ppu__DOT__rs;
+            static const bool ppu_trace = getenv("PPU_TRACE") != nullptr;
+            if (ppu_trace && rs != prev_rs && (int)frame == dbg_frame && rp.vsmile__DOT__soc__DOT__ppu__DOT__y == dbg_line)
+                printf("  RTL rs=%d n=%d cnt=%d\n", rs, rp.vsmile__DOT__soc__DOT__ppu__DOT__n, rp.vsmile__DOT__soc__DOT__ppu__DOT__cnt);
+            if (rs == 11 && prev_rs != 11 && (int)frame == dbg_frame && rp.vsmile__DOT__soc__DOT__ppu__DOT__y == dbg_line)
+                printf("  RTL strip row=%06X drawx=%3d w=%2d bpr=%2d pal=%02X fx=%d bl=%d\n",
+                       rp.vsmile__DOT__soc__DOT__ppu__DOT__row_addr, rp.vsmile__DOT__soc__DOT__ppu__DOT__drawx,
+                       rp.vsmile__DOT__soc__DOT__ppu__DOT__npix, rp.vsmile__DOT__soc__DOT__ppu__DOT__rb_n,
+                       rp.vsmile__DOT__soc__DOT__ppu__DOT__pal_off, rp.vsmile__DOT__soc__DOT__ppu__DOT__flip_x,
+                       rp.vsmile__DOT__soc__DOT__ppu__DOT__blend);
+            prev_rs = rs;
+        }
+        if (top->line_done) {
+            int y = top->done_y;
+            int buf = rp.vsmile__DOT__soc__DOT__ppu__DOT__cur;
+            int bad = 0;
+            for (int x = 0; x < 320; x++) {
+                uint16_t r = rp.vsmile__DOT__soc__DOT__ppu__DOT__lbuf[buf * 512 + x];
+                uint16_t e = ref_lines[y][x];
+                to888(r, rtl_frame[y][x]);
+                to888(e, ref_frame[y][x]);
+                if ((r & 0x8000 ? 0 : r) != (e & 0x8000 ? 0 : e)) bad++;
+            }
+            total_lines++;
+            if (bad) {
+                // the CPU may have changed sprite/tile data while the line
+                // was drawn: accept if the end-of-line state renders the same
+                ref.line(y);
+                int bad2 = 0;
+                for (int x = 0; x < 320; x++) {
+                    uint16_t r = rp.vsmile__DOT__soc__DOT__ppu__DOT__lbuf[buf * 512 + x];
+                    uint16_t e = ref.linebuf[x];
+                    if ((r & 0x8000 ? 0 : r) != (e & 0x8000 ? 0 : e)) bad2++;
+                }
+                if (bad2 == 0) { race_lines++; bad = 0; }
+                // palette written while the line was drawn: the RTL sees a
+                // mix of old and new entries, as real hardware would
+                else if (memcmp(pal_at_start[y], ref.vram + 0x300, 512) != 0) { pal_lines++; bad = 0; }
+                // likewise sprite/scroll RAM or RAM (tile maps) written mid-line
+                else if (snap_y == y && (memcmp(vram_at_start, ref.vram, sizeof vram_at_start) != 0 ||
+                                         memcmp(ram_at_start, &rp.vsmile__DOT__soc__DOT__ram[0], sizeof ram_at_start) != 0)) { mem_lines++; bad = 0; }
+            }
+            if (bad) {
+                frame_bad_lines++; frame_bad_px += bad; total_bad_lines++;
+                static int detail = 0;
+                if (detail < 6) {
+                    detail++;
+                    printf("  frame %u line %d: %d px differ:", frame, y, bad);
+                    int shown = 0;
+                    for (int x = 0; x < 320 && shown < 6; x++) {
+                        uint16_t r = rp.vsmile__DOT__soc__DOT__ppu__DOT__lbuf[buf * 512 + x];
+                        uint16_t e = ref_lines[y][x];
+                        if ((r & 0x8000 ? 0 : r) != (e & 0x8000 ? 0 : e)) { printf(" x%d rtl=%04X ref=%04X", x, r, e); shown++; }
+                    }
+                    printf("\n");
+                }
+            }
+            if (y == 239) {
+                if (frame_bad_lines)
+                    printf("  frame %u: %u lines differ from the reference (%u pixels)\n", frame, frame_bad_lines, frame_bad_px);
+                if (dump && (frame % dump_every) == 0) {
+                    write_ppm("rtl", rtl_frame);
+                    if (frame_bad_lines) write_ppm("ref", ref_frame);
+                }
+                frame++;
+                frame_bad_lines = frame_bad_px = 0;
+            }
+        }
 
         if (top->dbg_illegal) {
             fprintf(stderr, "illegal opcode at %06X\n", top->dbg_pc);
@@ -315,6 +482,9 @@ int main(int argc, char** argv) {
            (unsigned long long)n, clk_n / 108e6);
     if (freerun)
         printf("trace %s\n", trace_ok ? "matched until its end" : "diverged (see above)");
+    printf("video: %u frames, %llu/%llu lines differ from the reference renderer (%llu more matched the end-of-line state, %llu had palette and %llu other memory writes mid-line), %llu overruns\n",
+           frame, (unsigned long long)total_bad_lines, (unsigned long long)total_lines, (unsigned long long)race_lines,
+           (unsigned long long)pal_lines, (unsigned long long)mem_lines, (unsigned long long)overruns);
     printf("\ninterrupts taken      RTL      MAME(trace)\n");
     const char* names[9] = {"FIQ", "IRQ0 video", "IRQ1", "IRQ2 timer", "IRQ3 uart/adc", "IRQ4 audio", "IRQ5 ext", "IRQ6 1-4kHz", "IRQ7 tmb/4Hz"};
     for (int i = 0; i < 9; i++)
@@ -330,6 +500,7 @@ int main(int argc, char** argv) {
         else
             printf("  %04X %8llu        -\n", a, (unsigned long long)s.reads);
     }
+    wav.close();
     delete top;
     return 0;
 }

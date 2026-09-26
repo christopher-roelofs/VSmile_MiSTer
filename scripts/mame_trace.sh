@@ -12,6 +12,10 @@
 #            "R|W addr data"; the testbench replays register reads from this
 #            log so the CPU can be verified before any peripheral exists.
 #
+# MAME=path selects the MAME binary (default: `mame` on PATH).  The trace
+# must come from the same MAME revision as ref/mame (see MAME_REVISION):
+# 0.264's SPU differs from current git in channel start/stop semantics.
+#
 # MAME needs a system ROM to start even though the cart boots directly (the
 # cart is banked over the BIOS at reset), so a 0xFF-filled placeholder is
 # created if the real vsmile_v103.bin is not present.
@@ -25,6 +29,7 @@ here=$(cd "$(dirname "$0")/.." && pwd)
 rompath="$here/roms/mame"
 mkdir -p "$out" "$rompath/vsmile"
 echo "$cart" > "$out/cart"
+"${MAME:-mame}" -version > "$out/mame_version" 2>/dev/null || true
 if [ ! -f "$rompath/vsmile/vsmile_v103.bin" ]; then
     head -c 2097152 /dev/zero | tr '\0' '\377' > "$rompath/vsmile/vsmile_v103.bin"
 fi
@@ -54,7 +59,7 @@ EOF
 
 cd "$out"
 timeout -s KILL "${TRACE_TIMEOUT:-300}" env SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy \
-mame vsmile -rompath "$rompath" -cart "$cart" \
+"${MAME:-mame}" vsmile -rompath "$rompath" -cart "$cart" \
     -video none -sound none -nothrottle -window -noreadconfig -skip_gameinfo \
     -seconds_to_run "$secs" \
     -debug -debugger none -autoboot_script "$out/trace.lua" \
