@@ -46,6 +46,7 @@ module spg2xx (
     input  logic        uart_rx_valid,
     input  logic [7:0]  uart_rx_data,
     input  logic [1:0]  extint,
+    input  logic [1:0]  extint_evt,
 
     // video timing
     output logic [8:0]  vpos,
@@ -121,7 +122,7 @@ module spg2xx (
         .ds_we(io_ds_we), .ds_wdata(io_ds_wdata),
         .fiq_sel, .fiq_sel_we, .watchdog_reset,
         .uart_tx_valid, .uart_tx_data, .uart_rx_valid, .uart_rx_data,
-        .extint,
+        .extint, .extint_evt,
         .irq_timer, .irq_uart_adc, .irq_ext, .irq_hifreq, .irq_lofreq
     );
 

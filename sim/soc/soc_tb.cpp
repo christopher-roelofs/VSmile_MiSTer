@@ -150,8 +150,9 @@ int main(int argc, char** argv) {
     top->region = 0x1f;                 // English (US), VTech intro on
     top->has_bios = bios.empty() ? 0 : 1;
     top->cart_mask = cart_words - 1;
-    top->ctrl_rts = 0;
-    top->uart_rx_valid = 0;
+    top->joy = 0;
+    top->colors = 0;
+    top->buttons = 0;
     top->sim_io_override = freerun ? 0 : 1;
     top->sim_irq_override = freerun ? 0 : 1;
     top->sim_irq = 0;

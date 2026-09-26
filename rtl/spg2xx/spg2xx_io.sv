@@ -45,6 +45,7 @@ module spg2xx_io (
     input  logic [7:0]  uart_rx_data,
 
     input  logic [1:0]  extint,         // external interrupt levels (ctrl RTS)
+    input  logic [1:0]  extint_evt,     // MAME extint_w() calls: status := level
 
     // interrupt outputs (levels), MAME spg2xx_device routing
     output logic        irq_timer,      // IRQ2
@@ -553,8 +554,10 @@ module spg2xx_io (
             begin
                 logic [15:0] ns;
                 ns = (int_st & ~st_clr) | st_set;
-                ns[9]  = extint[0];     // MAME check_extint_irq: level-driven
-                ns[12] = extint[1];
+                // MAME check_extint_irq: the status bit follows the line only
+                // when the device drives it; the CPU may clear it in between
+                if (extint_evt[0]) ns[9]  = extint[0];
+                if (extint_evt[1]) ns[12] = extint[1];
                 int_st <= ns;
             end
         end

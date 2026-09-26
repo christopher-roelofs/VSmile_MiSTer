@@ -28,13 +28,10 @@ module vsmile (
     input  logic [15:0] mem_rdata,
     input  logic [22:0] cart_mask,      // cart size in words - 1
 
-    // controller ports (UART shared by both)
-    output logic        uart_tx_valid,
-    output logic [7:0]  uart_tx_data,
-    input  logic        uart_rx_valid,
-    input  logic [7:0]  uart_rx_data,
-    input  logic [1:0]  ctrl_rts,
-    output logic [1:0]  ctrl_select,
+    // joystick on controller port 1 (port 2 is empty, as MAME's default)
+    input  logic [3:0]  joy,            // up, down, left, right
+    input  logic [3:0]  colors,         // green, blue, yellow, red
+    input  logic [3:0]  buttons,        // ok, quit, help, abc
 
     output logic [8:0]  vpos,
     output logic [8:0]  hpos,
@@ -66,6 +63,21 @@ module vsmile (
     logic [1:0]  cs_mode;
     logic [15:0] portb_out, portc_out, portb_oe, portc_oe;
     logic [2:0]  port_wr;
+    logic        uart_tx_valid, uart_rx_valid;
+    logic [7:0]  uart_tx_data, uart_rx_data;
+    logic [1:0]  ctrl_rts, ctrl_rts_evt, ctrl_select;
+
+    // MAME vsmile_state::uart_rx sends console bytes to both ports; port 2
+    // has no device (RTS low)
+    vsmile_pad pad1 (
+        .clk, .reset, .ce, .joy, .colors, .buttons,
+        .select(ctrl_select[0]),
+        .rx_valid(uart_tx_valid), .rx_data(uart_tx_data),
+        .tx_valid(uart_rx_valid), .tx_data(uart_rx_data),
+        .rts(ctrl_rts[0]), .rts_evt(ctrl_rts_evt[0])
+    );
+    assign ctrl_rts[1]     = 1'b0;
+    assign ctrl_rts_evt[1] = 1'b0;
 
     // MAME portb_r: OFF (bit 7) / ON (bit 6) switches released, Restart off
     wire [15:0] portb_in = 16'h00c8;
@@ -87,7 +99,7 @@ module vsmile (
         .porta_out(), .portb_out, .portc_out,
         .porta_oe(), .portb_oe, .portc_oe, .port_wr,
         .uart_tx_valid, .uart_tx_data, .uart_rx_valid, .uart_rx_data,
-        .extint(ctrl_rts),
+        .extint(ctrl_rts), .extint_evt(ctrl_rts_evt),
         .vpos, .hpos, .vblank,
         .sim_io_override, .sim_io_rdata, .sim_irq_override, .sim_irq,
         .dbg_io_rd, .dbg_io_wr, .dbg_io_addr, .dbg_io_wdata, .dbg_io_rtl_rdata, .soc_irq,
