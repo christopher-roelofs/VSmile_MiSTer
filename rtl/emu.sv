@@ -170,10 +170,13 @@ wire        sd_ready;
 wire [63:0] sd_dout;
 reg         mem_pending;
 
-// the console reads; downloads write
-reg  rd_req;
+// the console reads; downloads write.  The controller raises ch1_ready one
+// clk before the last word of the burst is in ch1_dout[63:48], so the group
+// is taken one clk later.
+reg  rd_req, sd_ready_q;
 always @(posedge clk_sys) begin
-    rd_req <= 0;
+    rd_req     <= 0;
+    sd_ready_q <= sd_ready && mem_pending;
     if (mem_req && !mem_pending && !ioctl_download) begin
         rd_req      <= 1;
         mem_pending <= 1;
@@ -181,7 +184,7 @@ always @(posedge clk_sys) begin
     if (sd_ready) mem_pending <= 0;
     if (reset) mem_pending <= 0;
 end
-assign mem_ack   = sd_ready && mem_pending;
+assign mem_ack   = sd_ready_q;
 assign mem_rdata = sd_dout;
 
 sdram sdram
