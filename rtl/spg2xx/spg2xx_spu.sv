@@ -414,11 +414,13 @@ module spg2xx_spu (
                         if (w_tone == 2'd1) stop_now = 1'b1;
                         else begin do_loop = 1'b1; clr_adpcm = 1'b1; end
                     end else begin
-                        logic [3:0] nib;
+                        logic [3:0]  nib;
+                        logic [15:0] dec;
                         v   = raw >> shift[ch];
                         nib = v[3:0];
-                        if (w_a36) w[C_WDATA] <= adpcm36(ch, nib);
-                        else       w[C_WDATA] <= ima(ch, nib);
+                        if (w_a36) adpcm36(ch, nib, dec);
+                        else       ima(ch, nib, dec);
+                        w[C_WDATA] <= dec;
                     end
                 end else if (w_16bit) begin
                     if (w_tone != 0 && raw == 16'hffff) begin
@@ -661,8 +663,8 @@ module spg2xx_spu (
         end
     endtask
 
-    // MAME ima_adpcm_state::clock, returns the sample ^ 0x8000
-    function automatic logic [15:0] ima(input logic [3:0] c, input logic [3:0] nib);
+    // MAME ima_adpcm_state::clock; `o` is the sample ^ 0x8000
+    task automatic ima(input logic [3:0] c, input logic [3:0] nib, output logic [15:0] o);
         logic [14:0] sv;
         logic signed [17:0] d, s;
         logic signed [7:0] st;
@@ -680,11 +682,11 @@ module spg2xx_spu (
         if (st > 8'sd88)     st = 8'sd88;
         else if (st < 8'sd0) st = 8'sd0;
         ad_step[c] <= st[6:0];
-        return s[15:0] ^ 16'h8000;
-    endfunction
+        o = s[15:0] ^ 16'h8000;
+    endtask
 
     // MAME decode_adpcm36_nybble
-    function automatic logic [15:0] adpcm36(input logic [3:0] c, input logic [3:0] nib);
+    task automatic adpcm36(input logic [3:0] c, input logic [3:0] nib, output logic [15:0] o);
         logic [3:0]  sh;
         logic signed [15:0] f0, sd;
         logic signed [31:0] acc36;
@@ -694,8 +696,8 @@ module spg2xx_spu (
         acc36 = (32'(signed'(a36_prev[c])) * 32'(f0) + 32'sd32) >>> 12;
         sd = 16'((32'(sd) >>> sh) + acc36);
         a36_prev[c] <= sd;
-        return sd ^ 16'h8000;
-    endfunction
+        o = sd ^ 16'h8000;
+    endtask
 
     // MAME audio_beat_tick
     task automatic beat_tick;

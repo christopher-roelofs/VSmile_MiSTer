@@ -461,7 +461,8 @@ module spg2xx_io (
             if (wr) begin
                 int p;
                 // default path (MAME stores the value except for these strobes)
-                if (addr < 8'h80 && !(addr inside {R_TMB_CLEAR, R_TA_IRQCLR, R_TB_IRQCLR, R_WDOG_CLR, R_UART_STAT, R_UART_RXBUF}))
+                if (addr < 8'h80 && addr != R_TMB_CLEAR && addr != R_TA_IRQCLR && addr != R_TB_IRQCLR
+                    && addr != R_WDOG_CLR && addr != R_UART_STAT && addr != R_UART_RXBUF)
                     regs[addr[6:0]] <= wdata;
                 if (gpio_touch(addr, p)) begin
                     // data writes go to the buffer register

@@ -300,12 +300,17 @@ always @(posedge clk_sys) begin
     end
 end
 
-// cartridge size rounded up to a power of two (words - 1)
+// cartridge size rounded up to a power of two (words - 1): all ones below
+// and including the highest set bit of (words - 1)
 always @(posedge clk_sys) begin
-    reg [24:0] n;
-    n = 25'd1;
-    while (n < cart_bytes[24:1]) n = n << 1;
-    cart_mask <= 23'(n - 1'd1);
+    reg [23:0] wm1;
+    reg [22:0] m;
+    integer i;
+    wm1 = cart_bytes[24:1] - 1'd1;
+    m = 23'd0;
+    for (i = 22; i >= 0; i = i - 1)
+        if (wm1[i] && m == 0) m = (23'd2 << i) - 1'd1;
+    cart_mask <= m;
 end
 
 wire        mem_req, mem_ack;

@@ -42,8 +42,9 @@ SoC memory map (word addresses, MAME `spg2xx_device::internal_map`):
 4. **SPU** — 16-channel wavetable audio (PCM/ADPCM, envelopes, beat timer),
    registers verified against MAME 0.289.  ✅
 5. **Controller** — V.Smile joystick UART protocol (MAME `bus/vsmile/pad.cpp`).  ✅
-6. **MiSTer top** — `emu.sv` from Template_MiSTer, SDRAM for cart/BIOS,
-   OSD cart loading, region/language DIP settings.
+6. **MiSTer top** — `rtl/emu.sv`: SDRAM for cart/BIOS, OSD cart loading,
+   TV mode / region / intro options, joystick.  ✅ (compiles; untested on
+   hardware)
 7. Real hardware testing.
 
 ## Status: the whole console runs in lockstep with MAME
@@ -103,6 +104,23 @@ k starts at the same 27 MHz tick as in MAME.  The beam starts at line 240
 like MAME's screen; `mame_timing` selects MAME's exact 60 Hz frame
 (450,000 clocks) instead of true NTSC (449,592).
 
+## MiSTer
+
+    /media/fat/_Console/VSmile_<date>.rbf
+    /media/fat/games/VSmile/boot.rom        <- optional system ROM (vsmile_v103.bin)
+
+Cartridges load from the OSD (`Load Cartridge`, plain `.bin` dumps as in
+MAME's `vsmile_cart` list).  Games boot without a system ROM; one can also
+be loaded from the OSD.  Options: TV mode (NTSC/PAL), region (sets the
+language the system ROM and games use), VTech intro on/off.  Controls:
+d-pad, Green/Blue/Yellow/Red, OK/Quit/Help/ABC on joystick 1 (a V.Smile
+joystick has exactly these).
+
+Video is 320x240 progressive at 59.94 Hz (PAL: 320x288 at 50 Hz), 6.75 MHz
+pixel rate, through the framework's scaler.  Audio is the SPU's 70,312.5 Hz
+stereo stream.  The whole design runs on one 108 MHz clock (4x the
+console's 27 MHz); the CPU's cycle credit absorbs SDRAM latency.
+
 ## Layout
 
     rtl/unsp/        µ'nSP CPU core
@@ -111,8 +129,11 @@ like MAME's screen; `mame_timing` selects MAME's exact 60 Hz frame
                      (spg2xx_ppu.sv), sound (spg2xx_spu.sv)
     rtl/vsmile.sv    board: cart/BIOS banking, DIP switches, controller port
     rtl/vsmile_pad.sv joystick
+    rtl/vsmile_video.sv scan-out timing;  rtl/emu.sv MiSTer top;  rtl/sdram.sv
+    sys/             MiSTer framework;  VSmile.qsf/.qpf/.sdc Quartus 17.0 project
     sim/cpu/         CPU lockstep testbench (vs. MAME trace)
     sim/soc/         system lockstep / free-run testbench
+    sim/video/       scan-out timing check
     scripts/         mame_trace.sh: capture golden traces from MAME 0.264+
                      cpu_sweep.sh, soc_sweep.sh: run testbenches over traces
     ref/mame/        MAME reference sources (see MAME_REVISION)
