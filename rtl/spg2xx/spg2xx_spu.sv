@@ -150,6 +150,8 @@ module spg2xx_spu (
     logic [16:0] ramp_r;
     logic [21:0] envaddr_r;
     logic [3:0]  a36rem_r;
+    logic [18:0] acc_r;                   // acc[ch]
+    logic        hdr_need;                // ADPCM36 header read precedes the sample
 
     // ADPCM decode pipeline (E_DEC1 latches the channel state, E_DEC2/3 compute)
     logic signed [17:0] dec_d;
@@ -201,8 +203,11 @@ module spg2xx_spu (
     logic        s1_v, s1_we;
     logic [10:0] s1_addr;
     logic [15:0] s1_wdata;
-    assign idle  = es == E_IDLE && pend_start == 0 && pend_stop == 0 && pend_ramp == 0 && !s1_v && !ack;
-    wire  pa_go  = s1_v;
+    // requests are buffered in s1 and performed when the engine is between
+    // channels; `idle` (registered) tells the bus unit it may send one
+    wire  eng_idle = es == E_IDLE && pend_start == 0 && pend_stop == 0 && pend_ramp == 0;
+    always_ff @(posedge clk) idle <= !s1_v && !ack && !req && !reset;
+    wire  pa_go  = s1_v && eng_idle;
     wire  pa_cwe = pa_go && s1_we && s1_addr[10:9] == 2'b00;
     wire  pa_pwe = pa_go && s1_we && s1_addr[10:9] == 2'b01;
     wire [15:0] pa_cwd = cpu_creg_value(s1_addr[8:0], s1_wdata);
@@ -211,8 +216,8 @@ module spg2xx_spu (
     always_ff @(posedge clk) begin   // request stage
         if (reset) s1_v <= 1'b0;
         else begin
-            s1_v <= req && idle;
-            if (req && idle) begin s1_addr <= addr; s1_we <= we; s1_wdata <= wdata; end
+            if (req) begin s1_v <= 1'b1; s1_addr <= addr; s1_we <= we; s1_wdata <= wdata; end
+            else if (pa_go) s1_v <= 1'b0;
         end
     end
 
@@ -333,7 +338,7 @@ module spg2xx_spu (
                 if (pend_start != 0 || pend_stop != 0 || pend_ramp != 0) begin
                     ch <= 0;
                     es <= E_CMD;
-                end else if (tick_pending && !req && !s1_v) begin
+                end else if (tick_pending && !req && !s1_v && !ack) begin
                     tick_pending <= 1'b0;
                     es <= E_TICK;
                 end
@@ -390,6 +395,7 @@ module spg2xx_spu (
                 ramp_r          <= ramp_frame[ch];
                 envaddr_r       <= env_addr[ch];
                 a36rem_r        <= a36_rem[ch];
+                acc_r           <= acc[ch];
                 if (x[X_STATUS][ch]) begin
                     li <= 0;
                     load_cmd <= 1'b0;
@@ -416,8 +422,9 @@ module spg2xx_spu (
             end
             E_ADV: begin    // MAME advance_channel
                 logic [21:0] s;
-                s = {3'd0, acc[ch]} + {1'b0, w_phase_hi[2:0], w_phase, 2'b00};
+                s = {3'd0, acc_r} + {1'b0, w_phase_hi[2:0], w_phase, 2'b00};
                 acc[ch] <= s[18:0];
+                hdr_need <= w_a36 && w_tone != 0 && a36rem_r == 0;
                 lerp_r  <= s[18:11];
                 nfetch  <= s[21:19];
                 playing <= 1'b1;
@@ -428,7 +435,7 @@ module spg2xx_spu (
             E_FETCH: begin  // MAME fetch_sample, part 1
                 w[C_WDATA_PREV] <= w[C_WDATA];
                 if (fiq_timer_on[ch]) x[X_FIQ_ST][ch] <= 1'b1;
-                if (w_a36 && w_tone != 0 && a36rem_r == 0) begin
+                if (hdr_need) begin
                     mem_req  <= 1'b1;
                     mem_addr <= w_waddr;
                     es <= E_RD_HDR;
@@ -510,7 +517,7 @@ module spg2xx_spu (
                         sh = sh + 5'd4;
                         if (sh >= 5'd16) begin
                             sh = 0; a = a + 22'd1;
-                            if (w_a36) begin a36_rem[ch] <= a36rem_r - 4'd1; a36rem_r <= a36rem_r - 4'd1; end
+                            if (w_a36) begin a36_rem[ch] <= a36rem_r - 4'd1; a36rem_r <= a36rem_r - 4'd1; hdr_need <= (a36rem_r == 4'd1); end
                         end
                     end else if (m[14]) begin
                         a = a + 22'd1;

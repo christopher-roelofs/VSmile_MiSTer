@@ -23,8 +23,20 @@
 // Video: every scanline the RTL renders is compared pixel for pixel with a
 // C++ port of MAME's renderer (ppu_ref.h) drawing from the same memory at
 // the same moment; mismatching lines are counted per frame.
+// HW_TOP: build against sim/hw/vsmile_hw.sv, the console with the real
+// SDRAM controller and a chip model; the cart is downloaded into it through
+// the same write port the HPS uses.
+#ifdef HW_TOP
+#include "Vvsmile_hw.h"
+#include "Vvsmile_hw___024root.h"
+typedef Vvsmile_hw TopT;
+#define H(x) vsmile_hw__DOT__console__DOT__##x
+#else
 #include "Vvsmile.h"
 #include "Vvsmile___024root.h"
+typedef Vvsmile TopT;
+#define H(x) vsmile__DOT__##x
+#endif
 #include "verilated.h"
 #include "ppu_ref.h"
 
@@ -171,7 +183,11 @@ int main(int argc, char** argv) {
     while (cart_words < cart.size()) cart_words <<= 1;
     cart.resize(cart_words, 0xffff);
     std::vector<uint16_t> bios;
-    if (getenv("BIOS")) bios = load_words(getenv("BIOS"));
+    // the system ROM dump is big-endian words (MAME loads it ROM_REVERSE)
+    if (getenv("BIOS")) {
+        bios = load_words(getenv("BIOS"));
+        for (auto& w : bios) w = (uint16_t)((w >> 8) | (w << 8));
+    }
 
     TraceReader trace(dir + "/cpu.tr");
     MemLog mem(dir + "/mem.log");
@@ -181,12 +197,32 @@ int main(int argc, char** argv) {
     const char* dump = getenv("DUMP");
     const int dump_every = getenv("FRAMES") ? atoi(getenv("FRAMES")) : 60;
 
-    Vvsmile* top = new Vvsmile;
+    TopT* top = new TopT;
     top->pal = 0;
     top->mame_timing = 1;
     top->region = 0x1f;                 // English (US), VTech intro on
     top->has_bios = bios.empty() ? 0 : 1;
     top->cart_mask = cart_words - 1;
+#ifdef HW_TOP
+    // bring up the SDRAM controller, then download the cart (and BIOS)
+    top->sdram_init = 1; top->wr_req = 0; top->reset = 1; top->clk_vid = 0;
+    for (int i = 0; i < 40; i++) { top->clk = 0; top->eval(); top->clk = 1; top->eval(); }
+    top->sdram_init = 0;
+    for (int i = 0; i < 20000; i++) { top->clk = 0; top->eval(); top->clk = 1; top->eval(); }
+    // as emu.sv drives it: one wr_req pulse per word, then the next word
+    // only once wr_busy has dropped (HPS honours ioctl_wait) plus a few clks
+    auto dl_word = [&](uint32_t waddr, uint16_t v) {
+        top->wr_req = 1; top->wr_addr = waddr; top->wr_data = v;
+        top->clk = 0; top->eval(); top->clk = 1; top->eval();
+        top->wr_req = 0;
+        do { top->clk = 0; top->eval(); top->clk = 1; top->eval(); } while (top->wr_busy);
+        for (int i = 0; i < 3; i++) { top->clk = 0; top->eval(); top->clk = 1; top->eval(); }
+    };
+    for (uint32_t i = 0; i < cart.size(); i++) dl_word(i, cart[i]);
+    for (uint32_t i = 0; i < bios.size(); i++) dl_word(0x800000 + i, bios[i]);
+    while (top->wr_busy) { top->clk = 0; top->eval(); top->clk = 1; top->eval(); }
+    printf("downloaded %u cart words into the SDRAM model\n", (unsigned)cart.size());
+#endif
     top->joy = 0;
     top->colors = 0;
     top->buttons = 0;
@@ -195,7 +231,9 @@ int main(int argc, char** argv) {
     top->sim_irq = 0;
     top->reset = 1;
     top->ce = 0;
+#ifndef HW_TOP
     top->mem_ack = 0;
+#endif
 
     uint64_t clk_n = 0;
     int mem_lat = 0;
@@ -205,15 +243,15 @@ int main(int argc, char** argv) {
     // ---- video reference ----
     auto& rp = *top->rootp;
     PpuRef ref;
-    ref.regs = (const uint16_t*)&rp.vsmile__DOT__soc__DOT__vctl__DOT__regs[0];
-    ref.vram = (const uint16_t*)&rp.vsmile__DOT__soc__DOT__vram[0];
+    ref.regs = (const uint16_t*)&rp.H(soc__DOT__vctl__DOT__regs)[0];
+    ref.vram = (const uint16_t*)&rp.H(soc__DOT__vram)[0];
     ref.read = [&](uint32_t a) -> uint16_t {
-        if (a < 0x2800) return rp.vsmile__DOT__soc__DOT__ram[a];
-        if (a < 0x3000) return rp.vsmile__DOT__soc__DOT__vram[a - 0x2800];
+        if (a < 0x2800) return rp.H(soc__DOT__ram)[a];
+        if (a < 0x3000) return rp.H(soc__DOT__vram)[a - 0x2800];
         if (a < 0x4000) return 0;
-        bool bios_sel = (rp.vsmile__DOT__cs_mode & 2) && ((a >> 20) & 3) == 3;
+        bool bios_sel = (rp.H(cs_mode) & 2) && ((a >> 20) & 3) == 3;
         if (bios_sel) return bios.empty() ? 0xffff : bios[(a & 0xfffff) % bios.size()];
-        uint32_t ca = ((rp.vsmile__DOT__cs2 ? 0x400000u : 0u) | a) & (cart_words - 1);
+        uint32_t ca = ((rp.H(cs2) ? 0x400000u : 0u) | a) & (cart_words - 1);
         return cart[ca];
     };
     static uint16_t ref_lines[240][320];
@@ -279,6 +317,7 @@ int main(int argc, char** argv) {
         top->clk = 0;
         top->eval();
 
+#ifndef HW_TOP
         // external memory: fixed latency
         // MEMLAT: clks before mem_ack (default 0: answer in the request clk)
         static const int memlat = getenv("MEMLAT") ? atoi(getenv("MEMLAT")) : 0;
@@ -300,6 +339,7 @@ int main(int argc, char** argv) {
         } else top->mem_ack = 0;
         top->eval();
 
+#endif
         // SoC register traffic vs. MAME's bus log
         if (trace_ok && (top->dbg_io_rd || top->dbg_io_wr)) {
             MemEvent e;
@@ -343,12 +383,36 @@ int main(int argc, char** argv) {
         clk_n++;
 
         if (top->audio_strobe) wav.put((int16_t)top->audio_l, (int16_t)top->audio_r);
+#ifdef HW_TOP
+        {
+            // MEM_DEBUG=n: check the first n memory groups against the image
+            static int mem_dbg = getenv("MEM_DEBUG") ? atoi(getenv("MEM_DEBUG")) : 0;
+            static uint64_t mem_seen = 0, mem_bad = 0;
+            if (top->dbg_mem_ack) {
+                uint32_t base = top->dbg_mem_addr & ~3u;
+                uint64_t exp = 0;
+                for (int i = 3; i >= 0; i--) {
+                    uint32_t a = base + i;
+                    uint16_t v = (a < 0x800000) ? cart[a & (cart_words - 1)] : (bios.empty() ? 0xffff : bios[(a - 0x800000) % bios.size()]);
+                    exp = (exp << 16) | v;
+                }
+                mem_seen++;
+                if (exp != top->dbg_mem_rdata) mem_bad++;
+                if (mem_dbg > 0 && (mem_seen <= (uint64_t)mem_dbg || (exp != top->dbg_mem_rdata && mem_bad <= 8)))
+                    printf("  mem group %06X: got %016llX expected %016llX%s\n", base,
+                           (unsigned long long)top->dbg_mem_rdata, (unsigned long long)exp, exp != top->dbg_mem_rdata ? "  <-- WRONG" : "");
+                if (done || n + 1 >= max_insns) {}
+            }
+            static bool reported = false;
+            if (!reported && (n + 1 >= max_insns)) { reported = true; printf("memory groups checked: %llu, wrong: %llu\n", (unsigned long long)mem_seen, (unsigned long long)mem_bad); }
+        }
+#endif
         {
             static const bool pad_dbg = getenv("PAD_DEBUG") != nullptr;
             if (pad_dbg) {
                 auto& r = *top->rootp;
-                if (r.vsmile__DOT__uart_rx_valid) printf("  [%llu] pad->console %02X\n", (unsigned long long)n, r.vsmile__DOT__uart_rx_data);
-                if (r.vsmile__DOT__uart_tx_valid) printf("  [%llu] console->pad %02X sel=%d\n", (unsigned long long)n, r.vsmile__DOT__uart_tx_data, r.vsmile__DOT__ctrl_select & 1);
+                if (r.H(uart_rx_valid)) printf("  [%llu] pad->console %02X\n", (unsigned long long)n, r.H(uart_rx_data));
+                if (r.H(uart_tx_valid)) printf("  [%llu] console->pad %02X sel=%d\n", (unsigned long long)n, r.H(uart_tx_data), r.H(ctrl_select) & 1);
             }
         }
 
@@ -360,7 +424,7 @@ int main(int argc, char** argv) {
                 ref.dbg = ((int)frame == dbg_frame && y == dbg_line);
                 memcpy(pal_at_start[y], ref.vram + 0x300, 512);
                 memcpy(vram_at_start, ref.vram, sizeof vram_at_start);
-                memcpy(ram_at_start, &rp.vsmile__DOT__soc__DOT__ram[0], sizeof ram_at_start);
+                memcpy(ram_at_start, &rp.H(soc__DOT__ram)[0], sizeof ram_at_start);
                 snap_y = y;
                 ref.line(y);
                 memcpy(ref_lines[y], ref.linebuf, sizeof ref.linebuf);
@@ -368,24 +432,24 @@ int main(int argc, char** argv) {
         }
         if (top->ppu_overrun) overruns++;
         {
-            int rs = rp.vsmile__DOT__soc__DOT__ppu__DOT__rs;
+            int rs = rp.H(soc__DOT__ppu__DOT__rs);
             static const bool ppu_trace = getenv("PPU_TRACE") != nullptr;
-            if (ppu_trace && rs != prev_rs && (int)frame == dbg_frame && rp.vsmile__DOT__soc__DOT__ppu__DOT__y == dbg_line)
-                printf("  RTL rs=%d n=%d cnt=%d\n", rs, rp.vsmile__DOT__soc__DOT__ppu__DOT__n, rp.vsmile__DOT__soc__DOT__ppu__DOT__cnt);
-            if (rs == 11 && prev_rs != 11 && (int)frame == dbg_frame && rp.vsmile__DOT__soc__DOT__ppu__DOT__y == dbg_line)
+            if (ppu_trace && rs != prev_rs && (int)frame == dbg_frame && rp.H(soc__DOT__ppu__DOT__y) == dbg_line)
+                printf("  RTL rs=%d n=%d cnt=%d\n", rs, rp.H(soc__DOT__ppu__DOT__n), rp.H(soc__DOT__ppu__DOT__cnt));
+            if (rs == 11 && prev_rs != 11 && (int)frame == dbg_frame && rp.H(soc__DOT__ppu__DOT__y) == dbg_line)
                 printf("  RTL strip row=%06X drawx=%3d w=%2d bpr=%2d pal=%02X fx=%d bl=%d\n",
-                       rp.vsmile__DOT__soc__DOT__ppu__DOT__row_addr, rp.vsmile__DOT__soc__DOT__ppu__DOT__drawx,
-                       rp.vsmile__DOT__soc__DOT__ppu__DOT__npix, rp.vsmile__DOT__soc__DOT__ppu__DOT__rb_n,
-                       rp.vsmile__DOT__soc__DOT__ppu__DOT__pal_off, rp.vsmile__DOT__soc__DOT__ppu__DOT__flip_x,
-                       rp.vsmile__DOT__soc__DOT__ppu__DOT__blend);
+                       rp.H(soc__DOT__ppu__DOT__row_addr), rp.H(soc__DOT__ppu__DOT__drawx),
+                       rp.H(soc__DOT__ppu__DOT__npix), rp.H(soc__DOT__ppu__DOT__rb_n),
+                       rp.H(soc__DOT__ppu__DOT__pal_off), rp.H(soc__DOT__ppu__DOT__flip_x),
+                       rp.H(soc__DOT__ppu__DOT__blend));
             prev_rs = rs;
         }
         if (top->line_done) {
             int y = top->done_y;
-            int buf = rp.vsmile__DOT__soc__DOT__ppu__DOT__cur;
+            int buf = rp.H(soc__DOT__ppu__DOT__cur);
             int bad = 0;
             for (int x = 0; x < 320; x++) {
-                uint16_t r = rp.vsmile__DOT__soc__DOT__ppu__DOT__lbuf[buf * 512 + x];
+                uint16_t r = rp.H(soc__DOT__ppu__DOT__lbuf)[buf * 512 + x];
                 uint16_t e = ref_lines[y][x];
                 to888(r, rtl_frame[y][x]);
                 to888(e, ref_frame[y][x]);
@@ -398,7 +462,7 @@ int main(int argc, char** argv) {
                 ref.line(y);
                 int bad2 = 0;
                 for (int x = 0; x < 320; x++) {
-                    uint16_t r = rp.vsmile__DOT__soc__DOT__ppu__DOT__lbuf[buf * 512 + x];
+                    uint16_t r = rp.H(soc__DOT__ppu__DOT__lbuf)[buf * 512 + x];
                     uint16_t e = ref.linebuf[x];
                     if ((r & 0x8000 ? 0 : r) != (e & 0x8000 ? 0 : e)) bad2++;
                 }
@@ -408,7 +472,7 @@ int main(int argc, char** argv) {
                 else if (memcmp(pal_at_start[y], ref.vram + 0x300, 512) != 0) { pal_lines++; bad = 0; }
                 // likewise sprite/scroll RAM or RAM (tile maps) written mid-line
                 else if (snap_y == y && (memcmp(vram_at_start, ref.vram, sizeof vram_at_start) != 0 ||
-                                         memcmp(ram_at_start, &rp.vsmile__DOT__soc__DOT__ram[0], sizeof ram_at_start) != 0)) { mem_lines++; bad = 0; }
+                                         memcmp(ram_at_start, &rp.H(soc__DOT__ram)[0], sizeof ram_at_start) != 0)) { mem_lines++; bad = 0; }
             }
             if (bad) {
                 frame_bad_lines++; frame_bad_px += bad; total_bad_lines++;
@@ -418,7 +482,7 @@ int main(int argc, char** argv) {
                     printf("  frame %u line %d: %d px differ:", frame, y, bad);
                     int shown = 0;
                     for (int x = 0; x < 320 && shown < 6; x++) {
-                        uint16_t r = rp.vsmile__DOT__soc__DOT__ppu__DOT__lbuf[buf * 512 + x];
+                        uint16_t r = rp.H(soc__DOT__ppu__DOT__lbuf)[buf * 512 + x];
                         uint16_t e = ref_lines[y][x];
                         if ((r & 0x8000 ? 0 : r) != (e & 0x8000 ? 0 : e)) { printf(" x%d rtl=%04X ref=%04X", x, r, e); shown++; }
                     }

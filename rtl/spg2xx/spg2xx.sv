@@ -228,7 +228,7 @@ module spg2xx (
     // ------------------------------------------------------------------
     // Bus unit: one access at a time for the CPU or a DMA engine
     // ------------------------------------------------------------------
-    typedef enum logic [2:0] { A_IDLE, A_BRAM, A_EXT, A_REG, A_REG2, A_AUD, A_CHK } astate_t;
+    typedef enum logic [2:0] { A_IDLE, A_BRAM, A_EXT, A_REG, A_REG2, A_AUD, A_CHK, A_CHK2 } astate_t;
     astate_t ast;
 
     // DMA engine
@@ -356,12 +356,19 @@ module spg2xx (
     logic [1:0]  ext_sel;               // word of the group wanted
     logic        pf_pending, pf_active;   // prefetch wanted / in flight on the ext bus
     logic [19:0] pf_tag;
-    // ext requests are latched (A_CHK) before the cache lookup so the
-    // requester's address arithmetic is not on the compare path
-    wire         hit0 = rl_valid[0] && (ext_addr[21:2] == rl_tag[0]);
-    wire         hit1 = rl_valid[1] && (ext_addr[21:2] == rl_tag[1]);
+    // ext requests are latched in xq_* (A_CHK) before the cache lookup so the
+    // requester's address arithmetic is not on the compare path.  ext_addr
+    // itself only changes when a transfer is issued: a prefetch may be in
+    // flight while a new request is accepted.
+    logic [21:0] xq_addr;
+    logic [15:0] xq_wdata;
+    logic        xq_wr;
+    wire         hit0 = rl_valid[0] && (xq_addr[21:2] == rl_tag[0]);
+    wire         hit1 = rl_valid[1] && (xq_addr[21:2] == rl_tag[1]);
     wire         rl_hit = hit0 || hit1;
     wire [63:0]  rl_hit_data = hit0 ? rl_data[0] : rl_data[1];
+    logic        hit_r;
+    logic [63:0] hit_data_r;
 
     logic [1:0]  owner;             // 0 CPU, 1 DMA, 2 SPU, 3 PPU
     logic        dma_ack;
@@ -400,11 +407,11 @@ module spg2xx (
                     bram_sel     <= is_ram ? 2'd0 : 2'd1;
                     ast          <= A_BRAM;
                 end else if (is_ext) begin
-                    ext_wr    <= q_wr;
-                    ext_addr  <= q_addr;
-                    ext_wdata <= q_wdata;
-                    ext_sel   <= q_addr[1:0];
-                    ast       <= A_CHK;
+                    xq_wr    <= q_wr;
+                    xq_addr  <= q_addr;
+                    xq_wdata <= q_wdata;
+                    ext_sel  <= q_addr[1:0];
+                    ast      <= A_CHK;
                 end else begin
                     // registers / unmapped: latch, perform next clk
                     rq_addr  <= q_addr[15:0];
@@ -458,16 +465,27 @@ module spg2xx (
                 ast <= A_IDLE;
             end
             A_CHK: begin
-                // cache lookup on the latched address; a miss waits for a
-                // prefetch in flight (it may be bringing this very group)
-                if (!ext_wr && rl_hit) begin
-                    complete(rl_hit_data[ext_sel * 16 +: 16]);
-                    ppu_mem_rdata64 <= rl_hit_data;
+                // cache lookup on the latched address (registered), then
+                // deliver; a miss waits for a prefetch in flight (it may be
+                // bringing this very group)
+                hit_r      <= !xq_wr && rl_hit;
+                hit_data_r <= rl_hit_data;
+                ast        <= A_CHK2;
+            end
+            A_CHK2: begin
+                if (hit_r) begin
+                    complete(hit_data_r[ext_sel * 16 +: 16]);
+                    ppu_mem_rdata64 <= hit_data_r;
                     ast <= A_IDLE;
-                end else if (!pf_active) begin
-                    ext_req <= 1'b1;
+                end else if (pf_active) begin
+                    ast <= A_CHK;           // re-check once the prefetch lands
+                end else begin
+                    ext_req   <= 1'b1;
+                    ext_wr    <= xq_wr;
+                    ext_addr  <= xq_addr;
+                    ext_wdata <= xq_wdata;
                     // replace the line that does not hold the previous group
-                    rl_fill <= (rl_valid[0] && rl_tag[0] == ext_addr[21:2] - 20'd1) ? 1'b1 : 1'b0;
+                    rl_fill <= (rl_valid[0] && rl_tag[0] == xq_addr[21:2] - 20'd1) ? 1'b1 : 1'b0;
                     ast     <= A_EXT;
                 end
             end

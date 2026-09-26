@@ -145,7 +145,9 @@ always @(posedge clk_sys) begin
             ioctl_wait <= 1;
         end
     end
-    if (sd_ready) ioctl_wait <= 0;
+    // hold the HPS off until the word is in SDRAM (dl_req itself counts as
+    // busy in the clk after it is raised)
+    else if (ioctl_wait && !dl_req && !wr_busy) ioctl_wait <= 0;
     if (ioctl_download) begin
         if (dl_is_bios) has_bios <= 1;
         else cart_bytes <= ioctl_addr + 1'd1;
@@ -168,26 +170,31 @@ end
 wire        mem_req, mem_ack;
 wire [23:0] mem_addr;
 wire [63:0] mem_rdata;
-wire        sd_ready;
-wire [63:0] sd_dout;
-reg         mem_pending;
+wire        wr_busy;
+wire [25:0] ch1_addr;
+wire [15:0] ch1_din;
+wire        ch1_req, ch1_rnw, ch1_ready;
+wire [63:0] ch1_dout;
 
-// the console reads; downloads write.  The controller raises ch1_ready one
-// clk before the last word of the burst is in ch1_dout[63:48], so the group
-// is taken one clk later.
-reg  rd_req, sd_ready_q;
-always @(posedge clk_sys) begin
-    rd_req     <= 0;
-    sd_ready_q <= sd_ready && mem_pending;
-    if (mem_req && !mem_pending && !ioctl_download) begin
-        rd_req      <= 1;
-        mem_pending <= 1;
-    end
-    if (sd_ready) mem_pending <= 0;
-    if (reset) mem_pending <= 0;
-end
-assign mem_ack   = sd_ready_q;
-assign mem_rdata = sd_dout;
+vsmile_sdram sdram_glue
+(
+    .clk        (clk_sys),
+    .reset      (~pll_locked),
+    .mem_req    (mem_req),
+    .mem_addr   (mem_addr),
+    .mem_ack    (mem_ack),
+    .mem_rdata  (mem_rdata),
+    .wr_req     (dl_req),
+    .wr_addr    (dl_waddr),
+    .wr_data    (dl_wdata),
+    .wr_busy    (wr_busy),
+    .ch1_addr   (ch1_addr),
+    .ch1_din    (ch1_din),
+    .ch1_req    (ch1_req),
+    .ch1_rnw    (ch1_rnw),
+    .ch1_dout   (ch1_dout),
+    .ch1_ready  (ch1_ready)
+);
 
 sdram sdram
 (
@@ -206,14 +213,12 @@ sdram sdram
     .init       (~pll_locked),
     .clk        (clk_sys),
 
-    // ch1: 16-bit writes at the word, 64-bit reads of the aligned group of
-    // four words (SDRAM burst); byte address = word address << 1
-    .ch1_addr   (ioctl_download ? {2'b00, dl_waddr} : {2'b00, mem_addr[23:2], 2'b00}),
-    .ch1_din    (dl_wdata),
-    .ch1_req    (ioctl_download ? dl_req : rd_req),
-    .ch1_rnw    (~ioctl_download),
-    .ch1_dout   (sd_dout),
-    .ch1_ready  (sd_ready),
+    .ch1_addr   (ch1_addr),
+    .ch1_din    (ch1_din),
+    .ch1_req    (ch1_req),
+    .ch1_rnw    (ch1_rnw),
+    .ch1_dout   (ch1_dout),
+    .ch1_ready  (ch1_ready),
     .ch2_addr   (26'd0), .ch2_din(32'd0), .ch2_req(1'b0), .ch2_rnw(1'b1), .ch2_dout(), .ch2_ready(),
     .ch3_addr   (24'd0), .ch3_din(16'd0), .ch3_req(1'b0), .ch3_rnw(1'b1), .ch3_dout(), .ch3_ready()
 );
