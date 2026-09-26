@@ -50,6 +50,7 @@ localparam CONF_STR = {
     "O[2],TV Mode,NTSC,PAL;",
     "O[6:3],Region,US,UK,French,German,Spanish,Italian,Dutch,Portuguese,Chinese;",
     "O[7],VTech Intro,On,Off;",
+    "O[9:8],Debug,Off,SDRAM reads,Console;",
     "-;",
     "R0,Reset;",
     "J1,Green,Blue,Yellow,Red,OK,Quit,Help,ABC;",
@@ -264,6 +265,9 @@ wire [23:0] rgb888;
 wire signed [15:0] audio_l, audio_r;
 wire        audio_strobe;
 wire        ppu_ovr;
+wire        dbg_fetch, dbg_illegal, dbg_irq_ack, dbg_io_wr;
+wire [21:0] dbg_pc;
+wire [15:0] dbg_io_addr, dbg_io_wdata;
 
 vsmile console
 (
@@ -305,8 +309,8 @@ vsmile console
     .sim_io_rdata(16'd0),
     .sim_irq_override(1'b0),
     .sim_irq    (9'd0),
-    .dbg_io_rd(), .dbg_io_wr(), .dbg_io_addr(), .dbg_io_wdata(), .dbg_io_rtl_rdata(), .soc_irq(),
-    .dbg_fetch(), .dbg_pc(), .dbg_op(), .dbg_r(), .dbg_illegal(), .dbg_irq_ack(), .dbg_irq_ack_line()
+    .dbg_io_rd(), .dbg_io_wr(dbg_io_wr), .dbg_io_addr(dbg_io_addr), .dbg_io_wdata(dbg_io_wdata), .dbg_io_rtl_rdata(), .soc_irq(),
+    .dbg_fetch(dbg_fetch), .dbg_pc(dbg_pc), .dbg_op(), .dbg_r(), .dbg_illegal(dbg_illegal), .dbg_irq_ack(dbg_irq_ack), .dbg_irq_ack_line()
 );
 
 // LED: download, or (diagnostic) the renderer missed a line deadline in the
@@ -325,6 +329,109 @@ wire        ce_pix;
 wire [7:0]  r, g, b;
 wire        hs, vs, hblank, vblank;
 
+// Debug screens (OSD "Debug"), 16 rows of 64 bits, bit 63 at the left, 5 px
+// per bit, 14 px per row from line 8; read back with scripts/dbg_decode.py.
+//   SDRAM reads: per read (first four after reset) the word address, then
+//     ch1_dout at ch1_ready (s0), one clk later (s1, what the console takes)
+//     and two clks later (s2).
+//   Console: row 0 {PC, instructions}, 1 {IRQ acks, illegal ops, SDRAM
+//     reads}, 2 {frames, PPU overruns, I/O writes}, 3 PC[15:0] at the last
+//     four frame starts, 4-15 last values written to 0x2810-0x283F (four per
+//     row, lowest address in bits 15:0).
+reg  [23:0] dbg_addr [0:3];
+reg  [63:0] dbg_s0 [0:3], dbg_s1 [0:3], dbg_s2 [0:3];
+reg  [2:0]  dbg_n;          // reads issued since reset (saturates at 4)
+reg  [2:0]  dbg_k;          // reads completed
+reg  [2:0]  dbg_ph;         // one-hot: s0/s1/s2 capture in progress
+always @(posedge clk_sys) begin
+    dbg_ph <= {dbg_ph[1:0], 1'b0};
+    if (reset) begin
+        dbg_n <= 0; dbg_k <= 0; dbg_ph <= 0;
+    end else begin
+        if (ch1_req && ch1_rnw && !dbg_n[2]) begin
+            dbg_addr[dbg_n[1:0]] <= ch1_addr[23:0];
+            dbg_n <= dbg_n + 1'd1;
+        end
+        if (ch1_ready && ch1_rnw && !dbg_k[2] && dbg_k < dbg_n) begin
+            dbg_s0[dbg_k[1:0]] <= ch1_dout;
+            dbg_ph <= 3'b001;
+        end
+        if (dbg_ph[0]) dbg_s1[dbg_k[1:0]] <= ch1_dout;
+        if (dbg_ph[1]) begin dbg_s2[dbg_k[1:0]] <= ch1_dout; dbg_k <= dbg_k + 1'd1; end
+    end
+end
+
+reg  [31:0] st_insn, st_reads, st_iow;
+reg  [15:0] st_irq, st_ill, st_frames, st_ovr;
+reg  [63:0] st_pcs;
+reg  [15:0] st_vr [0:47];
+reg  [8:0]  st_vpos_q;
+always @(posedge clk_sys) begin
+    st_vpos_q <= vpos;
+    if (reset) begin
+        st_insn <= 0; st_reads <= 0; st_iow <= 0;
+        st_irq <= 0; st_ill <= 0; st_frames <= 0; st_ovr <= 0;
+    end else begin
+        if (dbg_fetch)   st_insn  <= st_insn + 1'd1;
+        if (ch1_req && ch1_rnw) st_reads <= st_reads + 1'd1;
+        if (dbg_io_wr)   st_iow   <= st_iow + 1'd1;
+        if (dbg_irq_ack) st_irq   <= st_irq + 1'd1;
+        if (dbg_illegal) st_ill   <= st_ill + 1'd1;
+        if (ppu_ovr)     st_ovr   <= st_ovr + 1'd1;
+        if (vpos == 9'd0 && st_vpos_q != 9'd0) begin
+            st_frames <= st_frames + 1'd1;
+            st_pcs    <= {st_pcs[47:0], dbg_pc[15:0]};
+        end
+    end
+    if (dbg_io_wr && dbg_io_addr >= 16'h2810 && dbg_io_addr < 16'h2840)
+        st_vr[6'(dbg_io_addr - 16'h2810)] <= dbg_io_wdata;
+end
+
+// the row being shown, copied into the video domain once per row (static
+// enough for a debug picture)
+reg  [63:0] dbg_row_sys;
+reg  [3:0]  dbg_row_sel, dbg_row_s;
+always @(posedge clk_sys) begin
+    dbg_row_s <= dbg_row_sel;
+    if (status[9]) case (dbg_row_s)
+        4'd0: dbg_row_sys <= {10'd0, dbg_pc, st_insn};
+        4'd1: dbg_row_sys <= {st_irq, st_ill, st_reads};
+        4'd2: dbg_row_sys <= {st_frames, st_ovr, st_iow};
+        4'd3: dbg_row_sys <= st_pcs;
+        default: dbg_row_sys <= {st_vr[{dbg_row_s - 4'd4, 2'd3}], st_vr[{dbg_row_s - 4'd4, 2'd2}],
+                                 st_vr[{dbg_row_s - 4'd4, 2'd1}], st_vr[{dbg_row_s - 4'd4, 2'd0}]};
+    endcase
+    else case (dbg_row_s[1:0])
+        2'd0: dbg_row_sys <= {40'd0, dbg_addr[dbg_row_s[3:2]]};
+        2'd1: dbg_row_sys <= dbg_s0[dbg_row_s[3:2]];
+        2'd2: dbg_row_sys <= dbg_s1[dbg_row_s[3:2]];
+        default: dbg_row_sys <= dbg_s2[dbg_row_s[3:2]];
+    endcase
+end
+
+// video side, pipelined: row/column, then the bit
+reg  [23:0] dbg_rgb;
+reg  [3:0]  dv_row;
+reg  [5:0]  dv_bit;
+reg         dv_on, dv_addr;
+reg  [63:0] dv_v;
+reg  [8:0]  dv_vpos, dv_x;
+reg  [1:0]  dv_mode;
+always @(posedge clk_vid) begin
+    reg [8:0] y;
+    dv_vpos <= vpos;
+    dv_x    <= out_x;
+    dv_mode <= status[9:8];
+    y       = dv_vpos - 9'd8;
+    dv_row  <= 4'(y / 9'd14);
+    dv_bit  <= 6'd63 - 6'(dv_x / 9'd5);
+    dv_on   <= (dv_vpos >= 9'd8) && (y < 9'd224) && (y % 9'd14 < 9'd11) && (dv_x < 9'd320) && (dv_x % 9'd5 != 9'd4);
+    dv_addr <= !dv_mode[1] && (y % 9'd56 < 9'd14);
+    dbg_row_sel <= dv_row;
+    dv_v    <= dbg_row_sys;
+    dbg_rgb <= !dv_on ? 24'h000040 : dv_v[dv_bit] ? (dv_addr ? 24'hFFFF00 : 24'hFFFFFF) : 24'h404040;
+end
+
 reg [1:0] reset_vid;
 always @(posedge clk_vid) reset_vid <= {reset_vid[0], reset};
 
@@ -336,7 +443,7 @@ vsmile_video video
     .hcnt   (hcnt),
     .vpos   (vpos),
     .out_x  (out_x),
-    .rgb_in (rgb888),
+    .rgb_in (dv_mode != 0 ? dbg_rgb : rgb888),
     .ce_pix (ce_pix),
     .r(r), .g(g), .b(b),
     .hs(hs), .vs(vs), .hblank(hblank), .vblank(vblank)

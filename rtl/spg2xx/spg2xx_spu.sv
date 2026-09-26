@@ -203,10 +203,14 @@ module spg2xx_spu (
     logic        s1_v, s1_we;
     logic [10:0] s1_addr;
     logic [15:0] s1_wdata;
-    // requests are buffered in s1 and performed when the engine is between
-    // channels; `idle` (registered) tells the bus unit it may send one
+    // requests are buffered in s1 and performed while the engine is idle;
+    // `idle` (registered) tells the bus unit it may send one.  It is only
+    // raised while the engine is idle with no tick due, and the engine starts
+    // a tick only after `idle` has been low for a clk: a register access must
+    // never meet a running engine, which needs the bus (held by that access)
+    // for its sample reads.
     wire  eng_idle = es == E_IDLE && pend_start == 0 && pend_stop == 0 && pend_ramp == 0;
-    always_ff @(posedge clk) idle <= !s1_v && !ack && !req && !reset;
+    always_ff @(posedge clk) idle <= !s1_v && !ack && !req && !reset && eng_idle && !tick_pending;
     wire  pa_go  = s1_v && eng_idle;
     wire  pa_cwe = pa_go && s1_we && s1_addr[10:9] == 2'b00;
     wire  pa_pwe = pa_go && s1_we && s1_addr[10:9] == 2'b01;
@@ -338,7 +342,7 @@ module spg2xx_spu (
                 if (pend_start != 0 || pend_stop != 0 || pend_ramp != 0) begin
                     ch <= 0;
                     es <= E_CMD;
-                end else if (tick_pending && !req && !s1_v && !ack) begin
+                end else if (tick_pending && !req && !s1_v && !ack && !idle) begin
                     tick_pending <= 1'b0;
                     es <= E_TICK;
                 end
