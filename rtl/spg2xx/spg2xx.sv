@@ -237,6 +237,22 @@ module spg2xx (
     logic        dma_wait;
     logic [15:0] sysdma [0:3];
 
+    // The CPU's request is combinational from its state: take a registered
+    // copy so the address/decode path starts at a flop.  The copy lags by a
+    // clk, so the clk after an acknowledge (when it still shows the finished
+    // request) is masked out.
+    logic [21:0] c_addr;
+    logic        c_rd, c_wr, cpu_done_q;
+    logic [15:0] c_wdata;
+    always_ff @(posedge clk) begin
+        c_addr     <= cpu_addr;
+        c_rd       <= cpu_rd;
+        c_wr       <= cpu_wr;
+        c_wdata    <= cpu_wdata;
+        cpu_done_q <= cpu_done;
+    end
+    wire cpu_want = (c_rd || c_wr) && !cpu_done && !cpu_done_q;
+
     // current requester: real-time units first (SPU > PPU), then DMA, then CPU
     wire         dma_active = (dst != D_IDLE);
     wire         dma_skip   = dma_sprite && (dst == D_WR) && ({6'd0, dma_dst} + {6'd0, dma_j[9:0]} >= 16'h400);
@@ -247,15 +263,15 @@ module spg2xx (
     wire         sel_cpu = !sel_rt && !dma_active;
     wire [21:0]  q_addr  = sel_spu ? spu_mem_addr
                          : sel_ppu ? ppu_mem_addr
-                         : !dma_active ? cpu_addr
+                         : !dma_active ? c_addr
                          : (dst == D_RD) ? dma_src + 22'(dma_j)
                          : dma_sprite ? 22'h2c00 + 22'(dma_dst) + 22'(dma_j[9:0])
                          : {8'd0, 14'(dma_dst + dma_j[13:0])};
-    wire         q_rd    = sel_rt ? 1'b1 : !dma_active ? cpu_rd : (dst == D_RD);
-    wire         q_wr    = sel_rt ? 1'b0 : !dma_active ? cpu_wr : (dst == D_WR);
-    wire [15:0]  q_wdata = !dma_active ? cpu_wdata : dma_data;
+    wire         q_rd    = sel_rt ? 1'b1 : !dma_active ? c_rd : (dst == D_RD);
+    wire         q_wr    = sel_rt ? 1'b0 : !dma_active ? c_wr : (dst == D_WR);
+    wire [15:0]  q_wdata = !dma_active ? c_wdata : dma_data;
     wire         q_want  = sel_rt ? 1'b1
-                         : sel_cpu ? ((cpu_rd || cpu_wr) && !cpu_done)
+                         : sel_cpu ? cpu_want
                          : (!dma_wait && (dst == D_RD || (dst == D_WR && !dma_skip)));
     // audio registers are only accessed while the SPU engine is idle; they
     // then complete in one clk
