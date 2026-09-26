@@ -52,8 +52,9 @@ module vsmile_hw (
     output logic [23:0] dbg_mem_addr,
     output logic [63:0] dbg_mem_rdata
 );
+    logic [23:0] ack_addr;
     assign dbg_mem_ack   = mem_ack;
-    assign dbg_mem_addr  = mem_addr;
+    assign dbg_mem_addr  = ack_addr;    // the address the completing read is for
     assign dbg_mem_rdata = mem_rdata;
 
     logic        mem_req, mem_ack;
@@ -73,14 +74,14 @@ module vsmile_hw (
 
     logic [25:0] ch1_addr;
     logic [15:0] ch1_din;
-    logic        ch1_req, ch1_rnw, ch1_ready;
+    logic        ch1_req, ch1_rnw, ch1_ready, ch1_taken;
     logic [63:0] ch1_dout;
 
     vsmile_sdram glue (
         .clk, .reset(sdram_init),
         .mem_req, .mem_addr, .mem_ack, .mem_rdata,
         .wr_req, .wr_addr, .wr_data, .wr_busy,
-        .ch1_addr, .ch1_din, .ch1_req, .ch1_rnw, .ch1_dout, .ch1_ready
+        .ch1_addr, .ch1_din, .ch1_req, .ch1_rnw, .ch1_dout, .ch1_ready, .ch1_taken, .ack_addr
     );
 
     wire  [15:0] SDRAM_DQ;
@@ -92,7 +93,7 @@ module vsmile_hw (
         .SDRAM_DQ, .SDRAM_A, .SDRAM_DQML, .SDRAM_DQMH, .SDRAM_BA, .SDRAM_nCS, .SDRAM_nWE,
         .SDRAM_nRAS, .SDRAM_nCAS, .SDRAM_CKE, .SDRAM_CLK,
         .init(sdram_init), .clk,
-        .ch1_addr, .ch1_din, .ch1_req, .ch1_rnw, .ch1_dout, .ch1_ready,
+        .ch1_addr, .ch1_din, .ch1_req, .ch1_rnw, .ch1_dout, .ch1_ready, .ch1_taken,
         .ch2_addr(26'd0), .ch2_din(32'd0), .ch2_req(1'b0), .ch2_rnw(1'b1), .ch2_dout(), .ch2_ready(),
         .ch3_addr(24'd0), .ch3_din(16'd0), .ch3_req(1'b0), .ch3_rnw(1'b1), .ch3_dout(), .ch3_ready()
     );

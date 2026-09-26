@@ -25,9 +25,9 @@ module vsmile (
     input  logic [4:0]  region,         // [3:0] language, [4] VTech intro
     input  logic        has_bios,       // system ROM loaded
 
-    output logic        mem_req,        // held until mem_ack
+    output logic        mem_req,        // one-clk issue pulse (up to four out)
     output logic [23:0] mem_addr,
-    input  logic        mem_ack,        // one clk, with mem_rdata
+    input  logic        mem_ack,        // one clk, with mem_rdata, in issue order
     input  logic [63:0] mem_rdata,
     input  logic [22:0] cart_mask,      // cart size in words - 1
 
@@ -149,19 +149,35 @@ module vsmile (
         end
     end
 
-    // external bus banking
-    wire bios_sel = cs_mode[1] && ext_addr[21:20] == 2'b11;
+    // external bus banking; reads go to the SDRAM (mem_*) except the system
+    // ROM area without a BIOS, which reads as 0xFFFF locally.  Data comes
+    // back in issue order, so local completions queue with the others.
+    wire bios_sel  = cs_mode[1] && ext_addr[21:20] == 2'b11;
+    wire ext_local = bios_sel && !has_bios;
     always_comb begin
         if (bios_sel) mem_addr = {4'h8, ext_addr[19:0]};
         else          mem_addr = {1'b0, 23'({cs2, ext_addr}) & cart_mask};
     end
-
-    // Combinational pass-through so fast memory completes within one CPU
-    // tick.  Writes to ROM are ignored; reads of an absent BIOS return 0xFFFF
-    // (MAME ROMREGION_ERASEFF).
-    wire ext_local = ext_wr || (bios_sel && !has_bios);
+    logic [3:0] lq_local;
+    logic [2:0] lq_h, lq_t;
+    // (an answer may come in the clk of the issue itself with zero-latency
+    // memory in simulation: the read being issued is then the head)
+    wire lq_empty   = (lq_h == lq_t);
+    wire head_local = lq_empty ? ext_local : lq_local[lq_h[1:0]];
     assign mem_req   = ext_req && !ext_local;
-    assign ext_ack   = ext_req && (ext_local || mem_ack);
-    assign ext_rdata = ext_local ? {4{16'hffff}} : mem_rdata;
+    assign ext_ack   = (!lq_empty || ext_req) && (head_local || mem_ack);
+    assign ext_rdata = head_local ? {4{16'hffff}} : mem_rdata;
+    always_ff @(posedge clk) begin
+        if (reset) begin
+            lq_h <= 3'd0;
+            lq_t <= 3'd0;
+        end else begin
+            if (ext_req) begin
+                lq_local[lq_t[1:0]] <= ext_local;
+                lq_t <= lq_t + 3'd1;
+            end
+            if (ext_ack) lq_h <= lq_h + 3'd1;
+        end
+    end
 
 endmodule

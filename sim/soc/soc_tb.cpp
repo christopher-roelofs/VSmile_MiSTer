@@ -331,25 +331,32 @@ int main(int argc, char** argv) {
         top->eval();
 
 #ifndef HW_TOP
-        // external memory: fixed latency
-        // MEMLAT: clks before mem_ack (default 0: answer in the request clk)
+        // external memory: reads are issued as one-clk pulses and answered
+        // in order.  MEMLAT: clks from issue to data (default 0: the next
+        // clk); MEMGAP: minimum clks between two answers (default 1), which
+        // models the SDRAM's burst spacing when reads overlap
         static const int memlat = getenv("MEMLAT") ? atoi(getenv("MEMLAT")) : 0;
-        if (top->mem_req && !top->mem_ack) {
-            if (mem_lat++ >= memlat) {
-                uint32_t base = top->mem_addr & ~3u;
-                uint64_t g = 0;
-                for (int i = 3; i >= 0; i--) {
-                    uint32_t a = base + i;
-                    uint16_t v = 0xffff;
-                    if (a < 0x800000) v = cart[a & (cart_words - 1)];
-                    else if (!bios.empty()) v = bios[(a - 0x800000) % bios.size()];
-                    g = (g << 16) | v;
-                }
-                top->mem_rdata = g;
-                top->mem_ack = 1;
-                mem_lat = 0;
+        static const int memgap = getenv("MEMGAP") ? atoi(getenv("MEMGAP")) : 1;
+        static std::deque<std::pair<uint32_t, uint64_t>> mq;
+        static uint64_t last_ack = 0;
+        top->mem_ack = 0;
+        if (top->mem_req) mq.push_back({top->mem_addr, clk_n});
+        if (!mq.empty() && clk_n >= mq.front().second + (uint64_t)memlat
+            && clk_n >= last_ack + (uint64_t)memgap) {
+            uint32_t base = mq.front().first & ~3u;
+            uint64_t g = 0;
+            for (int i = 3; i >= 0; i--) {
+                uint32_t a = base + i;
+                uint16_t v = 0xffff;
+                if (a < 0x800000) v = cart[a & (cart_words - 1)];
+                else if (!bios.empty()) v = bios[(a - 0x800000) % bios.size()];
+                g = (g << 16) | v;
             }
-        } else top->mem_ack = 0;
+            top->mem_rdata = g;
+            top->mem_ack = 1;
+            last_ack = clk_n;
+            mq.pop_front();
+        }
         top->eval();
 
 #endif

@@ -41,6 +41,7 @@ module sdram
 	input             ch1_req,     // request
 	input             ch1_rnw,     // 1 - read, 0 - write
 	output reg        ch1_ready,
+	output reg        ch1_taken,   // the pending ch1_req was taken (a new one may be given)
 	
 	input      [26:1] ch2_addr,    // 25 bit address for 8bit mode. addr[0] = 0 for 16bit mode for correct operations.
 	output reg [31:0] ch2_dout,    // data output to cpu
@@ -121,6 +122,7 @@ always @(posedge clk) begin
 	ch3_rq <= ch3_rq | ch3_req;
 
 	ch1_ready <= 0;
+	ch1_taken <= 0;
 	ch2_ready <= 0;
 	ch3_ready <= 0;
 
@@ -220,6 +222,7 @@ always @(posedge clk) begin
 				saved_wr   <= ~ch1_rnw;
 				ch         <= 0;
 				ch1_rq     <= 0;
+				ch1_taken  <= 1;
 				command    <= CMD_ACTIVE;
 				state      <= STATE_WAIT;
 			end

@@ -175,7 +175,7 @@ wire [63:0] mem_rdata;
 wire        wr_busy;
 wire [25:0] ch1_addr;
 wire [15:0] ch1_din;
-wire        ch1_req, ch1_rnw, ch1_ready;
+wire        ch1_req, ch1_rnw, ch1_ready, ch1_taken;
 wire [63:0] ch1_dout;
 
 vsmile_sdram sdram_glue
@@ -195,7 +195,9 @@ vsmile_sdram sdram_glue
     .ch1_req    (ch1_req),
     .ch1_rnw    (ch1_rnw),
     .ch1_dout   (ch1_dout),
-    .ch1_ready  (ch1_ready)
+    .ch1_ready  (ch1_ready),
+    .ch1_taken  (ch1_taken),
+    .ack_addr   ()
 );
 
 sdram sdram
@@ -221,6 +223,7 @@ sdram sdram
     .ch1_rnw    (ch1_rnw),
     .ch1_dout   (ch1_dout),
     .ch1_ready  (ch1_ready),
+    .ch1_taken  (ch1_taken),
     .ch2_addr   (26'd0), .ch2_din(32'd0), .ch2_req(1'b0), .ch2_rnw(1'b1), .ch2_dout(), .ch2_ready(),
     .ch3_addr   (24'd0), .ch3_din(16'd0), .ch3_req(1'b0), .ch3_rnw(1'b1), .ch3_dout(), .ch3_ready()
 );
