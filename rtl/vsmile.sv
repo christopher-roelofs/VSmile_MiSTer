@@ -11,7 +11,9 @@
 // Memory interface: a flat word address space
 //   000000-7FFFFF  cart ROM (up to 16 MB)
 //   800000-8FFFFF  system ROM (2 MB)
-// served by the platform (SDRAM on MiSTer, an array in simulation).
+// served by the platform (SDRAM on MiSTer, an array in simulation).  A read
+// returns the aligned group of four words containing mem_addr, word 0 in
+// bits [15:0].
 
 module vsmile (
     input  logic        clk,
@@ -26,7 +28,7 @@ module vsmile (
     output logic        mem_req,        // held until mem_ack
     output logic [23:0] mem_addr,
     input  logic        mem_ack,        // one clk, with mem_rdata
-    input  logic [15:0] mem_rdata,
+    input  logic [63:0] mem_rdata,
     input  logic [22:0] cart_mask,      // cart size in words - 1
 
     // joystick on controller port 1 (port 2 is empty, as MAME's default)
@@ -71,7 +73,8 @@ module vsmile (
 
     logic        ext_req, ext_wr, ext_ack;
     logic [21:0] ext_addr;
-    logic [15:0] ext_wdata, ext_rdata;
+    logic [15:0] ext_wdata;
+    logic [63:0] ext_rdata;
     logic [1:0]  cs_mode /* verilator public_flat_rd */;
     logic [15:0] portb_out, portc_out, portb_oe, portc_oe;
     logic [2:0]  port_wr;
@@ -148,6 +151,6 @@ module vsmile (
     wire ext_local = ext_wr || (bios_sel && !has_bios);
     assign mem_req   = ext_req && !ext_local;
     assign ext_ack   = ext_req && (ext_local || mem_ack);
-    assign ext_rdata = ext_local ? 16'hffff : mem_rdata;
+    assign ext_rdata = ext_local ? {4{16'hffff}} : mem_rdata;
 
 endmodule

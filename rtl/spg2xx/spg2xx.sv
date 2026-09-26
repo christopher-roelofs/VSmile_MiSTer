@@ -26,13 +26,15 @@ module spg2xx (
     input  logic        pal,
     input  logic        mame_timing,    // MAME-exact 60 Hz frame (verification)
 
-    // external bus (cart / system ROM), word addressed
+    // external bus (cart / system ROM): reads return the aligned group of
+    // four words containing ext_addr (word 0 in [15:0]); writes are ignored
+    // by the board (ROM) but still handshaken
     output logic        ext_req,
     output logic        ext_wr,
     output logic [21:0] ext_addr,
     output logic [15:0] ext_wdata,
     input  logic        ext_ack,        // one clk, with ext_rdata for reads
-    input  logic [15:0] ext_rdata,
+    input  logic [63:0] ext_rdata,
     output logic [1:0]  cs_mode,
 
     // GPIO
@@ -276,7 +278,9 @@ module spg2xx (
                          : (!dma_wait && (dst == D_RD || (dst == D_WR && !dma_skip)));
     // audio registers are only accessed while the SPU engine is idle; they
     // then complete in one clk
-    wire         q_valid = q_want && !(is_audio && !spu_idle);
+    // an ext miss waits while a prefetch occupies the bus (it may even be
+    // fetching the wanted group); hits and internal accesses never wait
+    wire         q_valid = q_want && !(is_audio && !spu_idle) && !(is_ext && !(q_rd && rl_hit) && pf_active);
     wire         go      = (ast == A_IDLE) && q_valid;
 
     // address decode
@@ -339,7 +343,21 @@ module spg2xx (
     assign dbg_io_rtl_rdata = (ast == A_AUD) ? spu_rdata : reg_rdata;
 
     // ext bus: address/data latched when the access is accepted (another
-    // requester may be selected while it is in flight)
+    // requester may be selected while it is in flight).  A two-line cache
+    // holds groups of four words: consecutive reads (pixel rows, code) are
+    // served from it in one clk, and after a miss the following group is
+    // prefetched into the other line while the bus is otherwise idle.
+    logic        rl_valid [0:1];
+    logic [19:0] rl_tag [0:1];          // addr[21:2]
+    logic [63:0] rl_data [0:1];
+    logic        rl_fill;               // line the current fetch goes to
+    logic [1:0]  ext_sel;               // word of the group wanted
+    logic        pf_pending, pf_active;   // prefetch wanted / in flight on the ext bus
+    logic [19:0] pf_tag;
+    wire         hit0 = rl_valid[0] && (q_addr[21:2] == rl_tag[0]);
+    wire         hit1 = rl_valid[1] && (q_addr[21:2] == rl_tag[1]);
+    wire         rl_hit = hit0 || hit1;
+    wire [63:0]  rl_hit_data = hit0 ? rl_data[0] : rl_data[1];
 
     logic [1:0]  owner;             // 0 CPU, 1 DMA, 2 SPU, 3 PPU
     logic        dma_ack;
@@ -358,6 +376,10 @@ module spg2xx (
             dst      <= D_IDLE;
             cpu_done <= 1'b0;
             ext_req  <= 1'b0;
+            rl_valid[0] <= 1'b0;
+            rl_valid[1] <= 1'b0;
+            pf_pending  <= 1'b0;
+            pf_active   <= 1'b0;
             dma_wait <= 1'b0;
             sysdma <= '{default: 16'd0};
         end else begin
@@ -373,11 +395,16 @@ module spg2xx (
                 end else if (is_bram) begin
                     bram_sel     <= is_ram ? 2'd0 : 2'd1;
                     ast          <= A_BRAM;
+                end else if (is_ext && q_rd && rl_hit) begin
+                    complete(rl_hit_data[q_addr[1:0] * 16 +: 16]);
                 end else if (is_ext) begin
                     ext_req   <= 1'b1;
                     ext_wr    <= q_wr;
                     ext_addr  <= q_addr;
                     ext_wdata <= q_wdata;
+                    ext_sel   <= q_addr[1:0];
+                    // replace the line that does not hold the previous group
+                    rl_fill   <= (rl_valid[0] && rl_tag[0] == q_addr[21:2] - 20'd1) ? 1'b1 : 1'b0;
                     ast       <= A_EXT;
                 end else begin
                     // registers / unmapped: latch, perform next clk
@@ -433,11 +460,37 @@ module spg2xx (
             end
             A_EXT: if (ext_ack) begin
                 ext_req <= 1'b0;
-                complete(ext_rdata);
+                complete(ext_rdata[ext_sel * 16 +: 16]);
+                if (!ext_wr) begin
+                    rl_valid[rl_fill] <= 1'b1;
+                    rl_tag[rl_fill]   <= ext_addr[21:2];
+                    rl_data[rl_fill]  <= ext_rdata;
+                    pf_pending        <= 1'b1;
+                    pf_tag            <= ext_addr[21:2] + 20'd1;
+                end
                 ast <= A_IDLE;
             end
             default: ast <= A_IDLE;
             endcase
+
+            // prefetch of the group after the last miss: issued when the ext
+            // bus is free and nobody wants it; completes in the background
+            if (pf_active) begin
+                if (ext_ack) begin
+                    ext_req <= 1'b0;
+                    pf_active <= 1'b0;
+                    rl_valid[rl_fill] <= 1'b1;
+                    rl_tag[rl_fill]   <= ext_addr[21:2];
+                    rl_data[rl_fill]  <= ext_rdata;
+                end
+            end else if (pf_pending && ast == A_IDLE && !(go && is_ext)) begin
+                pf_pending <= 1'b0;
+                pf_active  <= 1'b1;
+                ext_req    <= 1'b1;
+                ext_wr     <= 1'b0;
+                ext_addr   <= {pf_tag, 2'b00};
+                rl_fill    <= (rl_valid[0] && rl_tag[0] == pf_tag - 20'd1) ? 1'b1 : 1'b0;
+            end
 
             // DMA sequencing
             if (dma_ack || (dst == D_WR && dma_skip)) begin

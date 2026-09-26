@@ -284,11 +284,16 @@ int main(int argc, char** argv) {
         static const int memlat = getenv("MEMLAT") ? atoi(getenv("MEMLAT")) : 0;
         if (top->mem_req && !top->mem_ack) {
             if (mem_lat++ >= memlat) {
-                uint32_t a = top->mem_addr;
-                uint16_t v = 0xffff;
-                if (a < 0x800000) v = cart[a & (cart_words - 1)];
-                else if (!bios.empty()) v = bios[(a - 0x800000) % bios.size()];
-                top->mem_rdata = v;
+                uint32_t base = top->mem_addr & ~3u;
+                uint64_t g = 0;
+                for (int i = 3; i >= 0; i--) {
+                    uint32_t a = base + i;
+                    uint16_t v = 0xffff;
+                    if (a < 0x800000) v = cart[a & (cart_words - 1)];
+                    else if (!bios.empty()) v = bios[(a - 0x800000) % bios.size()];
+                    g = (g << 16) | v;
+                }
+                top->mem_rdata = g;
                 top->mem_ack = 1;
                 mem_lat = 0;
             }

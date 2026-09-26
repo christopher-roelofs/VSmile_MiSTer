@@ -10,159 +10,7 @@
 
 module emu
 (
-	//Master input clock
-	input         CLK_50M,
-
-	//Async reset from top-level module.
-	//Can be used as initial reset.
-	input         RESET,
-
-	//Must be passed to hps_io module
-	inout  [48:0] HPS_BUS,
-
-	//Base video clock. Usually equals to CLK_SYS.
-	output        CLK_VIDEO,
-
-	//Multiple resolutions are supported using different CE_PIXEL rates.
-	//Must be based on CLK_VIDEO
-	output        CE_PIXEL,
-
-	//Video aspect ratio for HDMI. Most retro systems have ratio 4:3.
-	//if VIDEO_ARX[12] or VIDEO_ARY[12] is set then [11:0] contains scaled size instead of aspect ratio.
-	output [12:0] VIDEO_ARX,
-	output [12:0] VIDEO_ARY,
-
-	output  [7:0] VGA_R,
-	output  [7:0] VGA_G,
-	output  [7:0] VGA_B,
-	output        VGA_HS,
-	output        VGA_VS,
-	output        VGA_DE,    // = ~(VBlank | HBlank)
-	output        VGA_F1,
-	output [1:0]  VGA_SL,
-	output        VGA_SCALER, // Force VGA scaler
-	output        VGA_DISABLE, // analog out is off
-
-	input  [11:0] HDMI_WIDTH,
-	input  [11:0] HDMI_HEIGHT,
-	output        HDMI_FREEZE,
-	output        HDMI_BLACKOUT,
-	output        HDMI_BOB_DEINT,
-
-`ifdef MISTER_FB
-	// Use framebuffer in DDRAM
-	// FB_FORMAT:
-	//    [2:0] : 011=8bpp(palette) 100=16bpp 101=24bpp 110=32bpp
-	//    [3]   : 0=16bits 565 1=16bits 1555
-	//    [4]   : 0=RGB  1=BGR (for 16/24/32 modes)
-	//
-	// FB_STRIDE either 0 (rounded to 256 bytes) or multiple of pixel size (in bytes)
-	output        FB_EN,
-	output  [4:0] FB_FORMAT,
-	output [11:0] FB_WIDTH,
-	output [11:0] FB_HEIGHT,
-	output [31:0] FB_BASE,
-	output [13:0] FB_STRIDE,
-	input         FB_VBL,
-	input         FB_LL,
-	output        FB_FORCE_BLANK,
-
-`ifdef MISTER_FB_PALETTE
-	// Palette control for 8bit modes.
-	// Ignored for other video modes.
-	output        FB_PAL_CLK,
-	output  [7:0] FB_PAL_ADDR,
-	output [23:0] FB_PAL_DOUT,
-	input  [23:0] FB_PAL_DIN,
-	output        FB_PAL_WR,
-`endif
-`endif
-
-	output        LED_USER,  // 1 - ON, 0 - OFF.
-
-	// b[1]: 0 - LED status is system status OR'd with b[0]
-	//       1 - LED status is controled solely by b[0]
-	// hint: supply 2'b00 to let the system control the LED.
-	output  [1:0] LED_POWER,
-	output  [1:0] LED_DISK,
-
-	// I/O board button press simulation (active high)
-	// b[1]: user button
-	// b[0]: osd button
-	output  [1:0] BUTTONS,
-
-	input         CLK_AUDIO, // 24.576 MHz
-	output [15:0] AUDIO_L,
-	output [15:0] AUDIO_R,
-	output        AUDIO_S,   // 1 - signed audio samples, 0 - unsigned
-	output  [1:0] AUDIO_MIX, // 0 - no mix, 1 - 25%, 2 - 50%, 3 - 100% (mono)
-
-	//ADC
-	inout   [3:0] ADC_BUS,
-
-	//SD-SPI
-	output        SD_SCK,
-	output        SD_MOSI,
-	input         SD_MISO,
-	output        SD_CS,
-	input         SD_CD,
-
-	//High latency DDR3 RAM interface
-	//Use for non-critical time purposes
-	output        DDRAM_CLK,
-	input         DDRAM_BUSY,
-	output  [7:0] DDRAM_BURSTCNT,
-	output [28:0] DDRAM_ADDR,
-	input  [63:0] DDRAM_DOUT,
-	input         DDRAM_DOUT_READY,
-	output        DDRAM_RD,
-	output [63:0] DDRAM_DIN,
-	output  [7:0] DDRAM_BE,
-	output        DDRAM_WE,
-
-	//SDRAM interface with lower latency
-	output        SDRAM_CLK,
-	output        SDRAM_CKE,
-	output [12:0] SDRAM_A,
-	output  [1:0] SDRAM_BA,
-	inout  [15:0] SDRAM_DQ,
-	output        SDRAM_DQML,
-	output        SDRAM_DQMH,
-	output        SDRAM_nCS,
-	output        SDRAM_nCAS,
-	output        SDRAM_nRAS,
-	output        SDRAM_nWE,
-
-`ifdef MISTER_DUAL_SDRAM
-	//Secondary SDRAM
-	//Set all output SDRAM_* signals to Z ASAP if master clock is stopped
-	input         SDRAM2_EN,
-	output        SDRAM2_CLK,
-	output [12:0] SDRAM2_A,
-	output  [1:0] SDRAM2_BA,
-	inout  [15:0] SDRAM2_DQ,
-	output        SDRAM2_nCS,
-	output        SDRAM2_nCAS,
-	output        SDRAM2_nRAS,
-	output        SDRAM2_nWE,
-`endif
-
-	input         UART_CTS,
-	output        UART_RTS,
-	input         UART_RXD,
-	output        UART_TXD,
-	output        UART_DTR,
-	input         UART_DSR,
-
-	// Open-drain User port.
-	// 0 - D+/RX
-	// 1 - D-/TX
-	// 2..6 - USR2..USR6
-	// Set USER_OUT to 1 to read from USER_IN.
-	input   [6:0] USER_IN,
-	output  [6:0] USER_OUT,
-
-	input         OSD_STATUS
+	`include "sys/emu_ports.vh"
 );
 
 assign ADC_BUS       = 'Z;
@@ -205,6 +53,7 @@ localparam CONF_STR = {
     "-;",
     "R0,Reset;",
     "J1,Green,Blue,Yellow,Red,OK,Quit,Help,ABC;",
+    "jn,B,X,Y,L,A,Select,R,Start;",
     "V,v0.1.",`BUILD_DATE
 };
 
@@ -269,9 +118,10 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 ///////////////////////////////////////////////////////////////////////
 // SDRAM: cartridge and system ROM
 //
-// Downloads arrive as bytes; the ROM images are little-endian 16-bit
-// words, so pairs are written as one word.  BIOS is index 0 (boot.rom
-// auto-load) or 2 (OSD), cartridges index 1.
+// Downloads arrive as bytes and pairs are written as one word.  Cartridge
+// dumps are little-endian words; the system ROM dump (MAME vsmile_v103.bin
+// etc.) is big-endian, MAME loads it with ROM_REVERSE, so it is swapped.
+// BIOS is index 0 (boot.rom auto-load) or 2 (OSD), cartridges index 1.
 
 wire        dl_is_bios = (ioctl_index == 0) || (ioctl_index == 2);
 reg  [7:0]  dl_lo;
@@ -288,7 +138,7 @@ always @(posedge clk_sys) begin
         if (!ioctl_addr[0]) dl_lo <= ioctl_dout;
         else begin
             dl_waddr   <= {dl_is_bios, ioctl_addr[23:1]};
-            dl_wdata   <= {ioctl_dout, dl_lo};
+            dl_wdata   <= dl_is_bios ? {dl_lo, ioctl_dout} : {ioctl_dout, dl_lo};
             dl_req     <= 1;
             ioctl_wait <= 1;
         end
@@ -315,9 +165,9 @@ end
 
 wire        mem_req, mem_ack;
 wire [23:0] mem_addr;
-wire [15:0] mem_rdata;
+wire [63:0] mem_rdata;
 wire        sd_ready;
-wire [15:0] sd_dout;
+wire [63:0] sd_dout;
 reg         mem_pending;
 
 // the console reads; downloads write
@@ -351,16 +201,16 @@ sdram sdram
     .init       (~pll_locked),
     .clk        (clk_sys),
 
-    .ch1_addr   (26'd0), .ch1_din(16'd0), .ch1_req(1'b0), .ch1_rnw(1'b1), .ch1_dout(), .ch1_ready(),
+    // ch1: 16-bit writes at the word, 64-bit reads of the aligned group of
+    // four words (SDRAM burst); byte address = word address << 1
+    .ch1_addr   (ioctl_download ? {2'b00, dl_waddr} : {2'b00, mem_addr[23:2], 2'b00}),
+    .ch1_din    (dl_wdata),
+    .ch1_req    (ioctl_download ? dl_req : rd_req),
+    .ch1_rnw    (~ioctl_download),
+    .ch1_dout   (sd_dout),
+    .ch1_ready  (sd_ready),
     .ch2_addr   (26'd0), .ch2_din(32'd0), .ch2_req(1'b0), .ch2_rnw(1'b1), .ch2_dout(), .ch2_ready(),
-
-    // ch3: 16-bit words, byte address = word address << 1
-    .ch3_addr   (ioctl_download ? {dl_waddr, 1'b0} : {mem_addr, 1'b0}),
-    .ch3_din    (dl_wdata),
-    .ch3_req    (ioctl_download ? dl_req : rd_req),
-    .ch3_rnw    (~ioctl_download),
-    .ch3_dout   (sd_dout),
-    .ch3_ready  (sd_ready)
+    .ch3_addr   (24'd0), .ch3_din(16'd0), .ch3_req(1'b0), .ch3_rnw(1'b1), .ch3_dout(), .ch3_ready()
 );
 
 ///////////////////////////////////////////////////////////////////////
@@ -400,6 +250,7 @@ wire [8:0]  out_x;
 wire [23:0] rgb888;
 wire signed [15:0] audio_l, audio_r;
 wire        audio_strobe;
+wire        ppu_ovr;
 
 vsmile console
 (
@@ -435,7 +286,7 @@ vsmile console
     .out_rgb888 (rgb888),
     .line_done  (),
     .done_y     (),
-    .ppu_overrun(),
+    .ppu_overrun(ppu_ovr),
 
     .sim_io_override(1'b0),
     .sim_io_rdata(16'd0),
@@ -445,7 +296,14 @@ vsmile console
     .dbg_fetch(), .dbg_pc(), .dbg_op(), .dbg_r(), .dbg_illegal(), .dbg_irq_ack(), .dbg_irq_ack_line()
 );
 
-assign LED_USER = ioctl_download;
+// LED: download, or (diagnostic) the renderer missed a line deadline in the
+// last ~0.6 s
+reg [25:0] ovr_timer = 0;
+always @(posedge clk_sys) begin
+    if (ppu_ovr) ovr_timer <= 26'h3ffffff;
+    else if (ovr_timer != 0) ovr_timer <= ovr_timer - 1'd1;
+end
+assign LED_USER = ioctl_download | (ovr_timer != 0);
 
 ///////////////////////////////////////////////////////////////////////
 // Video
