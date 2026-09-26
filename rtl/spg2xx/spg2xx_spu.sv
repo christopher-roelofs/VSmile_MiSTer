@@ -134,8 +134,8 @@ module spg2xx_spu (
     // ------------------------------------------------------------------
     typedef enum logic [4:0] {
         E_IDLE, E_CMD, E_CMD_LOAD, E_CMD_APPLY,
-        E_TICK, E_CH, E_LOAD, E_ADV, E_FETCH, E_RD_HDR, E_RD_RAW, E_FETCH2, E_DEC1, E_DEC2,
-        E_MIX1, E_MIX1B, E_MIX2, E_MIX3, E_MIX3B, E_ENV, E_ENV_RD, E_WB, E_OUT, E_OUT2
+        E_TICK, E_CH, E_LOAD, E_ADV, E_FETCH, E_RD_HDR, E_RD_RAW, E_FETCH2, E_DEC1, E_DEC2, E_DEC3,
+        E_MIX1, E_MIX1B, E_MIX2, E_MIX3, E_MIX3B, E_ENV, E_ENV2, E_ENV_RD, E_WB, E_OUT, E_OUT2
     } estate_t;
     estate_t es;
 
@@ -143,7 +143,14 @@ module spg2xx_spu (
     logic [4:0]  li;                      // load index
     logic [2:0]  wi;                      // write-back index
     logic        load_cmd;                // E_LOAD returns to E_CMD_APPLY
-    // ADPCM decode pipeline (E_DEC1 latches the channel state, E_DEC2 computes)
+    // the current channel's engine state, latched in E_CH (arrays indexed by
+    // `ch` would otherwise feed the arithmetic through a 16-way mux)
+    logic [26:0] envclk_r, envclk_reload_r;
+    logic [16:0] ramp_r;
+    logic [21:0] envaddr_r;
+
+    // ADPCM decode pipeline (E_DEC1 latches the channel state, E_DEC2/3 compute)
+    logic signed [17:0] dec_d;
     logic [3:0]  nib_r;
     logic        dec_a36;
     logic [14:0] sv_r;
@@ -375,6 +382,10 @@ module spg2xx_spu (
                 es <= E_CH;
             end
             E_CH: begin
+                envclk_r        <= envclk_frame[ch];
+                envclk_reload_r <= envclk_count(env_clock(ch));
+                ramp_r          <= ramp_frame[ch];
+                envaddr_r       <= env_addr[ch];
                 if (x[X_STATUS][ch]) begin
                     li <= 0;
                     load_cmd <= 1'b0;
@@ -523,10 +534,25 @@ module spg2xx_spu (
                 hdr36_r  <= a36_hdr[ch];
                 es <= E_DEC2;
             end
-            E_DEC2: begin
+            E_DEC2: begin   // IMA: delta from the step; ADPCM36: whole decode
+                logic signed [17:0] d;
                 logic [15:0] dec;
-                if (dec_a36) adpcm36(nib_r, dec);
-                else         ima(nib_r, dec);
+                d = 18'(sv_r >> 3);
+                if (nib_r[2]) d = d + 18'(sv_r);
+                if (nib_r[1]) d = d + 18'(sv_r >> 1);
+                if (nib_r[0]) d = d + 18'(sv_r >> 2);
+                if (nib_r[3]) d = -d;
+                dec_d <= d;
+                if (dec_a36) begin
+                    adpcm36(nib_r, dec);
+                    w[C_WDATA] <= dec;
+                    es <= dec_next;
+                end else
+                    es <= E_DEC3;
+            end
+            E_DEC3: begin   // IMA: sum, saturate, step
+                logic [15:0] dec;
+                ima(nib_r, dec);
                 w[C_WDATA] <= dec;
                 es <= dec_next;
             end
@@ -592,7 +618,7 @@ module spg2xx_spu (
             E_ENV: begin
                 if (x[X_RAMPDOWN][ch]) begin
                     logic [16:0] f;
-                    f = (ramp_frame[ch] > 0) ? ramp_frame[ch] - 17'd1 : 17'd0;
+                    f = (ramp_r > 0) ? ramp_r - 17'd1 : 17'd0;
                     ramp_frame[ch] <= f;
                     if (f == 0) begin      // audio_rampdown_tick
                         logic [7:0] ne;
@@ -609,16 +635,13 @@ module spg2xx_spu (
                     es <= E_WB;
                 end else if (!x[X_ENV_MODE][ch]) begin
                     logic [26:0] f;
-                    f = (envclk_frame[ch] > 0) ? envclk_frame[ch] - 27'd1 : 27'd0;
-                    envclk_frame[ch] <= f;
-                    if (f == 0) begin
-                        envclk_frame[ch] <= envclk_count(env_clock(ch));
-                        env_tick();
-                    end else
-                        es <= E_WB;
+                    f = (envclk_r > 0) ? envclk_r - 27'd1 : 27'd0;
+                    envclk_frame[ch] <= (f == 0) ? envclk_reload_r : f;
+                    es <= (f == 0) ? E_ENV2 : E_WB;
                 end else
                     es <= E_WB;
             end
+            E_ENV2: env_tick();
 
             E_ENV_RD: if (mem_ack) begin
                 mem_req <= 1'b0;
@@ -633,14 +656,14 @@ module spg2xx_spu (
                     if (env_rd_three)
                         env_addr[ch] <= {w[C_EADDR_HIGH][5:0], w[C_EADDR]} + 22'(mem_rdata[8:0]);
                     else
-                        env_addr[ch] <= env_addr[ch] + 22'd2;
+                        env_addr[ch] <= envaddr_r + 22'd2;
                     // new_count = get_envelope_load() of the reloaded ENV1
                     w[C_ENV_DATA][15:8] <= env1[7:0];
                     es <= E_WB;
                 end else begin
                     env_rd_i <= env_rd_i + 2'd1;
                     mem_req  <= 1'b1;
-                    mem_addr <= env_addr[ch] + 22'(env_rd_i) + 22'd1;
+                    mem_addr <= envaddr_r + 22'(env_rd_i) + 22'd1;
                 end
             end
 
@@ -732,7 +755,7 @@ module spg2xx_spu (
                             env_rd_i     <= 0;
                             env_rd_three <= 1'b1;
                             mem_req      <= 1'b1;
-                            mem_addr     <= env_addr[ch];
+                            mem_addr     <= envaddr_r;
                             es <= E_ENV_RD;
                         end else begin
                             w[C_ENV1][15:9]     <= rc[6:0];
@@ -742,7 +765,7 @@ module spg2xx_spu (
                         env_rd_i     <= 0;
                         env_rd_three <= 1'b0;
                         mem_req      <= 1'b1;
-                        mem_addr     <= env_addr[ch];
+                        mem_addr     <= envaddr_r;
                         es <= E_ENV_RD;
                     end
                 end else
@@ -755,14 +778,9 @@ module spg2xx_spu (
     // MAME ima_adpcm_state::clock on the state latched in E_DEC1; `o` is
     // the sample ^ 0x8000
     task automatic ima(input logic [3:0] nib, output logic [15:0] o);
-        logic signed [17:0] d, s;
+        logic signed [17:0] s;
         logic signed [7:0] st;
-        d  = 18'(sv_r >> 3);
-        if (nib[2]) d = d + 18'(sv_r);
-        if (nib[1]) d = d + 18'(sv_r >> 1);
-        if (nib[0]) d = d + 18'(sv_r >> 2);
-        if (nib[3]) d = -d;
-        s = 18'(sig_r) + d;
+        s = 18'(sig_r) + dec_d;
         if (s > 18'sd32767)       s = 18'sd32767;
         else if (s < -18'sd32768) s = -18'sd32768;
         ad_sig[ch] <= 17'(s);
