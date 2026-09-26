@@ -77,6 +77,7 @@ module unsp_core (
         S_RESET,      // read reset vector
         S_FETCH,
         S_DECODE,
+        S_EXEC,       // ALU on latched operands
         S_IMM,        // fetch imm16 operand
         S_MRD,        // ALU operand read
         S_MWR,        // ALU store / [imm16] result write
@@ -110,6 +111,9 @@ module unsp_core (
     logic [15:0] op_b;      // MAME r1
     logic [21:0] ea;        // MAME r2 (effective address)
     logic [15:0] mwr_data;  // data for S_MWR
+    logic [15:0] ex_a, ex_b;  // S_EXEC operands
+    logic [21:0] ex_e;
+    logic        ex_mem;      // S_EXEC result goes to memory ([imm16] = rB op rA)
     logic [2:0]  cnt;       // push/pop remaining
     logic [2:0]  preg;      // push/pop current register
     logic [3:0]  int_line;
@@ -454,11 +458,11 @@ module unsp_core (
                     end
                     3'd1: begin // imm6
                         op_b <= 16'(imm6);
-                        alu_exec(r[opa], 16'(imm6), 22'd0);
+                        sched(r[opa], 16'(imm6), 22'd0);
                     end
                     3'd2: begin // (non push/pop) MAME: r1 = 0, no cycles
                         op_b <= 16'd0;
-                        alu_exec(r[opa], 16'd0, 22'd0);
+                        sched(r[opa], 16'd0, 22'd0);
                     end
                     3'd3: begin // indirect
                         logic [15:0] rb;
@@ -492,20 +496,20 @@ module unsp_core (
                         case (opn)
                             3'd0: begin
                                 op_b <= r[opb];
-                                alu_exec(r[opa], r[opb], 22'd0);
+                                sched(r[opa], r[opb], 22'd0);
                             end
                             3'd1, 3'd2, 3'd3: state <= S_IMM;
                             default: begin // ASR
                                 op_b <= sh_res;
                                 sb   <= sh_sb;
-                                alu_exec(r[opa], sh_res, 22'd0);
+                                sched(r[opa], sh_res, 22'd0);
                             end
                         endcase
                     end
                     3'd5, 3'd6: begin
                         op_b <= sh_res;
                         sb   <= sh_sb;
-                        alu_exec(r[opa], sh_res, 22'd0);
+                        sched(r[opa], sh_res, 22'd0);
                     end
                     3'd7: begin // [imm6]
                         ea    <= {16'd0, imm6};
@@ -516,6 +520,22 @@ module unsp_core (
             end
 
             // ----------------------------------------------------------
+            S_EXEC: begin
+                if (ex_mem) begin
+                    logic [16:0] res;
+                    logic        wrt, nzsc, nz;
+                    logic [15:0] b2;
+                    alu(op0, ex_a, ex_b, fC, res, wrt, nzsc, nz, b2);
+                    if (opa != PC) r[SR] <= flags(r[SR], res, ex_a, b2, nzsc, nz);
+                    if (wrt) begin
+                        mwr_data <= res[15:0];
+                        state    <= S_MWR;
+                    end else
+                        finish(alu_cost(op1, opn, opa == PC));
+                end else
+                    alu_exec(ex_a, ex_b, ex_e);
+            end
+
             S_IMM: if (ready) begin
                 imm <= rdata;
                 lpc_inc();
@@ -530,7 +550,7 @@ module unsp_core (
                         3'd1: begin // rA = rB op imm16
                             op_a <= r[opb];
                             op_b <= rdata;
-                            alu_exec(r[opb], rdata, 22'd0);
+                            sched(r[opb], rdata, 22'd0);
                         end
                         3'd2: begin // rA = rB op [imm16]
                             op_a     <= r[opb];
@@ -539,20 +559,16 @@ module unsp_core (
                             if (is_store) state <= S_MWR; else state <= S_MRD;
                         end
                         default: begin // [imm16] = rB op rA (result goes to memory)
-                            logic [16:0] res;
-                            logic        wrt, nzsc, nz;
-                            logic [15:0] b2;
-                            alu(op0, r[opb], r[opa], fC, res, wrt, nzsc, nz, b2);
-                            if (opa != PC) r[SR] <= flags(r[SR], res, r[opb], b2, nzsc, nz);
                             ea <= {6'd0, rdata};
                             if (is_store) begin
                                 mwr_data <= r[opb];
                                 state    <= S_MWR;
-                            end else if (wrt) begin
-                                mwr_data <= res[15:0];
-                                state    <= S_MWR;
-                            end else
-                                finish(alu_cost(op1, opn, opa == PC));
+                            end else begin
+                                ex_a   <= r[opb];
+                                ex_b   <= r[opa];
+                                ex_mem <= 1'b1;
+                                state  <= S_EXEC;
+                            end
                         end
                     endcase
                 end
@@ -564,7 +580,7 @@ module unsp_core (
                     mwr_data <= op_a;
                     state    <= S_MWR;
                 end else
-                    alu_exec(op_a, rdata, ea);
+                    sched(op_a, rdata, ea);
             end
 
             S_MWR: if (ready) begin
@@ -716,6 +732,15 @@ module unsp_core (
         // SoC write to 0x3D2F; may arrive on any clk, not just a CPU tick
         if (!reset && ds_we) r[SR][15:10] <= ds_wdata;
     end
+
+    // latch ALU operands; executed in S_EXEC
+    task automatic sched(input logic [15:0] a, input logic [15:0] b, input logic [21:0] e);
+        ex_a   <= a;
+        ex_b   <= b;
+        ex_e   <= e;
+        ex_mem <= 1'b0;
+        state  <= S_EXEC;
+    endtask
 
     // ALU execute + write-back for register destinations, and the
     // store-to-[imm16] form (op1=4 opn=3) which goes through S_MWR.

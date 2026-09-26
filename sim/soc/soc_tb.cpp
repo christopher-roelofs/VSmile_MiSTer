@@ -337,6 +337,14 @@ int main(int argc, char** argv) {
         clk_n++;
 
         if (top->audio_strobe) wav.put((int16_t)top->audio_l, (int16_t)top->audio_r);
+        {
+            static const bool pad_dbg = getenv("PAD_DEBUG") != nullptr;
+            if (pad_dbg) {
+                auto& r = *top->rootp;
+                if (r.vsmile__DOT__uart_rx_valid) printf("  [%llu] pad->console %02X\n", (unsigned long long)n, r.vsmile__DOT__uart_rx_data);
+                if (r.vsmile__DOT__uart_tx_valid) printf("  [%llu] console->pad %02X sel=%d\n", (unsigned long long)n, r.vsmile__DOT__uart_tx_data, r.vsmile__DOT__ctrl_select & 1);
+            }
+        }
 
         // reference renders line y when the RTL starts it (previous line's start)
         if (top->vpos != prev_vpos) {

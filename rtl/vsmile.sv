@@ -74,9 +74,9 @@ module vsmile (
     logic [1:0]  cs_mode /* verilator public_flat_rd */;
     logic [15:0] portb_out, portc_out, portb_oe, portc_oe;
     logic [2:0]  port_wr;
-    logic        uart_tx_valid, uart_rx_valid;
-    logic [7:0]  uart_tx_data, uart_rx_data;
-    logic [1:0]  ctrl_rts, ctrl_rts_evt, ctrl_select;
+    logic        uart_tx_valid /* verilator public_flat_rd */, uart_rx_valid /* verilator public_flat_rd */;
+    logic [7:0]  uart_tx_data /* verilator public_flat_rd */, uart_rx_data /* verilator public_flat_rd */;
+    logic [1:0]  ctrl_rts, ctrl_rts_evt, ctrl_select /* verilator public_flat_rd */;
 
     // MAME vsmile_state::uart_rx sends console bytes to both ports; port 2
     // has no device (RTS low)
