@@ -7,7 +7,7 @@
 static int run(bool pal) {
     Vvsmile_video* v = new Vvsmile_video;
     const int line_len = pal ? 1728 : 1716, lines = pal ? 312 : 262;
-    v->pal = pal; v->reset = 1; v->ce = 0; v->rgb_in = 0x123456;
+    v->pal = pal; v->reset = 1; v->rgb_in = 0x123456;
     for (int i = 0; i < 8; i++) { v->clk = 0; v->eval(); v->clk = 1; v->eval(); }
     v->reset = 0;
     int hcnt = 0, vpos = 240, fails = 0;
@@ -15,9 +15,10 @@ static int run(bool pal) {
     int prev_hs = 0, prev_vs = 0;
     long clk = 0;
     int max_x = -1, min_x = 9999;
-    for (long t = 0; t < (long)line_len * lines * 4 * 3; t++) {
-        bool ce = (clk & 3) == 3;
-        v->ce = ce;
+    // the module runs at 54 MHz: hcnt (a 27 MHz count) is presented for two
+    // clks; `ce` marks the clk on which it advances
+    for (long t = 0; t < (long)line_len * lines * 2 * 3; t++) {
+        bool ce = (clk & 1) == 1;
         v->clk = 0; v->eval(); v->clk = 1; v->eval();
         clk++;
         if (v->ce_pix) {

@@ -24,6 +24,7 @@
 module spg2xx_ppu (
     input  logic        clk,
     input  logic        reset,
+    input  logic        clk_vid,        // scan-out clock (line buffer read port)
 
     input  logic [15:0] regs [0:255],   // video registers (spg2xx_vctl)
     input  logic        line_start,     // a new scanline begins
@@ -65,7 +66,13 @@ module spg2xx_ppu (
     always_ff @(posedge clk) begin
         if (lb_we) lbuf[{cur, lb_waddr}] <= lb_wdata;
         lb_q     <= lbuf[{cur, lb_raddr}];
-        lb_out_q <= lbuf[{~cur, out_x}];
+    end
+    // scan-out reads the other buffer on the video clock; `cur` changes once
+    // per line and is resynchronised there
+    logic [1:0] cur_v;
+    always_ff @(posedge clk_vid) begin
+        cur_v    <= {cur_v[0], cur};
+        lb_out_q <= lbuf[{~cur_v[1], out_x}];
     end
 
     wire [15:0] out_px = lb_out_q[15] ? 16'd0 : lb_out_q;
@@ -105,8 +112,8 @@ module spg2xx_ppu (
         R_IDLE, R_CLEAR,
         R_SCAN,
         R_PRIO,
-        R_PAGE, R_TILE, R_TILE_RD, R_EX_RD,
-        R_SPR, R_SPR_RD, R_SPR_SETUP,
+        R_PAGE, R_TILE, R_TILE_ISSUE, R_TILE_RD, R_EX_RD,
+        R_SPR, R_SPR_RD, R_SPR_SETUP, R_SPR_SETUP2,
         R_ADDR1, R_ADDR2, R_FETCH, R_DRAW, R_DRAIN,
         R_DONE
     } rstate_t;
@@ -149,6 +156,14 @@ module spg2xx_ppu (
     logic [2:0]  s_bpp;                 // 1..4 : nc_bpp/2
     logic [5:0]  s_bpr;
     logic [11:0] s_wpt;
+
+    // sprite geometry latched between R_SPR_SETUP and R_SPR_SETUP2
+    logic [15:0] sp_attr;
+    logic [6:0]  sp_tw, sp_th;
+    logic [3:0]  sp_ncb;
+    logic [8:0]  sp_ux;
+    logic [5:0]  sp_line;
+    logic        sp_draw;
 
     // strip address pipeline: row = gfx + wpt*tile + bpr*line
     logic [21:0] m_gfx;
@@ -348,10 +363,13 @@ module spg2xx_ppu (
                     y0     = bitmap_y >> ({1'b0, th_sh} + 3'd3);
                     ta     = 16'(realx0) + 16'(tcx) * 16'(y0);
                     tile_address <= ta;
-                    mem_req  <= 1'b1;
-                    mem_addr <= pg_ctrl[2] ? {6'd0, pg_tilemap} : {6'd0, pg_tilemap + ta};
-                    rs <= R_TILE_RD;
+                    rs <= R_TILE_ISSUE;
                 end
+            end
+            R_TILE_ISSUE: begin
+                mem_req  <= 1'b1;
+                mem_addr <= pg_ctrl[2] ? {6'd0, pg_tilemap} : {6'd0, pg_tilemap + tile_address};
+                rs <= R_TILE_RD;
             end
 
             R_TILE_RD: if (mem_ack) begin
@@ -445,19 +463,24 @@ module spg2xx_ppu (
                 sl = scanx[5:0];
                 tile_w <= tw; tile_h <= th; tw_sh <= tws; th_sh <= ths;
                 s_bpp  <= 3'(attr[1:0]) + 3'd1;
-                s_bpr  <= 6'((12'(ncb) * 12'(tw)) >> 4);
-                s_wpt  <= 12'(((12'(ncb) * 12'(tw)) >> 4) * 12'(th));
                 n <= n + 9'd1;
-                if (draw) begin
-                    logic [5:0]  bpr;
-                    logic [11:0] wpt;
-                    logic [7:0]  po;
-                    bpr = 6'((12'(ncb) * 12'(tw)) >> 4);
-                    wpt = 12'(12'(bpr) * 12'(th));
-                    po  = {attr[11:8], 4'd0} & ~(8'((8'd1 << ncb) - 8'd1));
-                    npix <= tw;
-                    strip_start(spr_gfx, spr_w[0], sl, th, bpr, wpt, attr[2], attr[3], attr[14], po, ux, R_SPR);
-                end else
+                sp_attr <= attr; sp_tw <= tw; sp_th <= th; sp_ncb <= ncb;
+                sp_ux <= ux; sp_line <= sl; sp_draw <= draw;
+                rs <= R_SPR_SETUP2;
+            end
+            R_SPR_SETUP2: begin   // row geometry, then the strip
+                logic [5:0]  bpr;
+                logic [11:0] wpt;
+                logic [7:0]  po;
+                bpr = 6'((12'(sp_ncb) * 12'(sp_tw)) >> 4);
+                wpt = 12'(12'(bpr) * 12'(sp_th));
+                po  = {sp_attr[11:8], 4'd0} & ~(8'((8'd1 << sp_ncb) - 8'd1));
+                s_bpr <= bpr;
+                s_wpt <= wpt;
+                npix  <= sp_tw;
+                if (sp_draw)
+                    strip_start(spr_gfx, spr_w[0], sp_line, sp_th, bpr, wpt, sp_attr[2], sp_attr[3], sp_attr[14], po, sp_ux, R_SPR);
+                else
                     rs <= R_SPR;
             end
 

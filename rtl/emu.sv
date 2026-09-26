@@ -211,8 +211,8 @@ localparam CONF_STR = {
 ///////////////////////////////////////////////////////////////////////
 // Clocks
 
-wire clk_sys;   // 108 MHz
-wire clk_ram;   // 108 MHz, phase shifted for the SDRAM chip
+wire clk_sys;   // 108 MHz: console, SDRAM, hps_io
+wire clk_vid;   // 54 MHz: scan-out and the framework's video path
 wire pll_locked;
 
 pll pll
@@ -220,7 +220,7 @@ pll pll
     .refclk   (CLK_50M),
     .rst      (0),
     .outclk_0 (clk_sys),
-    .outclk_1 (clk_ram),
+    .outclk_1 (clk_vid),
     .locked   (pll_locked)
 );
 
@@ -406,6 +406,7 @@ vsmile console
     .clk        (clk_sys),
     .reset      (reset),
     .ce         (ce_27),
+    .clk_vid    (clk_vid),
     .pal        (status[2]),
     .mame_timing(1'b0),
     .region     ({~status[7], lang}),
@@ -453,11 +454,13 @@ wire        ce_pix;
 wire [7:0]  r, g, b;
 wire        hs, vs, hblank, vblank;
 
+reg [1:0] reset_vid;
+always @(posedge clk_vid) reset_vid <= {reset_vid[0], reset};
+
 vsmile_video video
 (
-    .clk    (clk_sys),
-    .reset  (reset),
-    .ce     (ce_27),
+    .clk    (clk_vid),
+    .reset  (reset_vid[1]),
     .pal    (status[2]),
     .hcnt   (hcnt),
     .vpos   (vpos),
@@ -468,11 +471,11 @@ vsmile_video video
     .hs(hs), .vs(vs), .hblank(hblank), .vblank(vblank)
 );
 
-assign CLK_VIDEO = clk_sys;
+assign CLK_VIDEO = clk_vid;
 
 video_mixer #(.LINE_LENGTH(320), .GAMMA(1)) video_mixer
 (
-    .CLK_VIDEO   (clk_sys),
+    .CLK_VIDEO   (clk_vid),
     .CE_PIXEL    (CE_PIXEL),
     .ce_pix      (ce_pix),
     .scandoubler (forced_scandoubler),

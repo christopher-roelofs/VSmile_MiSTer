@@ -17,6 +17,7 @@ module vsmile (
     input  logic        clk,
     input  logic        reset,
     input  logic        ce,
+    input  logic        clk_vid,        // scan-out clock (line buffer read)
     input  logic        pal,
     input  logic        mame_timing,
     input  logic [4:0]  region,         // [3:0] language, [4] VTech intro
@@ -104,7 +105,7 @@ module vsmile (
                             region};
 
     spg2xx soc (
-        .clk, .reset, .ce, .pal, .mame_timing,
+        .clk, .reset, .ce, .clk_vid, .pal, .mame_timing,
         .ext_req, .ext_wr, .ext_addr, .ext_wdata, .ext_ack, .ext_rdata, .cs_mode,
         .porta_in(16'h0000), .portb_in, .portc_in,
         .porta_out(), .portb_out, .portc_out,

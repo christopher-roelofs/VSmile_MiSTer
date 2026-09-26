@@ -22,6 +22,7 @@ module spg2xx (
     input  logic        clk,
     input  logic        reset,
     input  logic        ce,
+    input  logic        clk_vid,        // scan-out clock for the line buffer
     input  logic        pal,
     input  logic        mame_timing,    // MAME-exact 60 Hz frame (verification)
 
@@ -161,7 +162,7 @@ module spg2xx (
     logic [15:0] ppu_vram_q;
 
     spg2xx_ppu ppu (
-        .clk, .reset,
+        .clk, .reset, .clk_vid,
         .regs(vregs), .line_start, .line_vpos(vpos), .last_line,
         .mem_req(ppu_mem_req), .mem_addr(ppu_mem_addr), .mem_ack(ppu_mem_ack), .mem_rdata(ppu_mem_rdata),
         .vram_addr(ppu_vram_addr), .vram_q(ppu_vram_q),
@@ -223,7 +224,7 @@ module spg2xx (
     // ------------------------------------------------------------------
     // Bus unit: one access at a time for the CPU or a DMA engine
     // ------------------------------------------------------------------
-    typedef enum logic [2:0] { A_IDLE, A_BRAM, A_EXT, A_REG, A_AUD } astate_t;
+    typedef enum logic [2:0] { A_IDLE, A_BRAM, A_EXT, A_REG, A_REG2, A_AUD } astate_t;
     astate_t ast;
 
     // DMA engine
@@ -292,7 +293,7 @@ module spg2xx (
 
     // Register accesses are latched at accept and performed one clk later
     // (A_REG): keeps the CPU-address -> peripheral logic path short.
-    logic [15:0] rq_addr, rq_wdata;
+    logic [15:0] rq_addr, rq_wdata, rq_rdata;
     logic        rq_rd, rq_wr, rq_cpu;
     wire rq_is_vreg = rq_addr[13:8] == 6'h28;
     wire rq_is_io   = rq_addr[13:8] == 6'h3d;
@@ -389,11 +390,10 @@ module spg2xx (
                 end
             end
             A_REG: begin
-                logic [15:0] v;
-                v = reg_rdata;
-                if (rq_logged && rq_rd && sim_io_override && rq_cpu) v = sim_io_rdata;
-                complete(v);
-                ast <= A_IDLE;
+                // reads: value latched here (side effects of the read strobe
+                // happen now too), delivered next clk
+                rq_rdata <= (rq_logged && rq_rd && sim_io_override && rq_cpu) ? sim_io_rdata : reg_rdata;
+                ast <= A_REG2;
                 // register write side effects owned by the bus unit
                 if (rq_wr && rq_is_dma) begin
                     if (rq_addr[1:0] != 2'd2) sysdma[rq_addr[1:0]] <= rq_wdata;
@@ -418,6 +418,10 @@ module spg2xx (
             end
             A_BRAM: begin
                 complete((bram_sel == 2'd0) ? ram_q : vram_q);
+                ast <= A_IDLE;
+            end
+            A_REG2: begin
+                complete(rq_rdata);
                 ast <= A_IDLE;
             end
             A_AUD: if (spu_ack) begin

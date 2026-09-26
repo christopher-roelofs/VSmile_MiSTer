@@ -270,9 +270,10 @@ int main(int argc, char** argv) {
 
     bool done = false;
     while (n < max_insns && !done) {
-        // clk = 108 MHz, ce = 27 MHz
+        // clk = 108 MHz, ce = 27 MHz, clk_vid = 54 MHz (toggles every clk)
         const bool ce = (clk_n & 3) == 3;
         top->ce = ce;
+        top->clk_vid = clk_n & 1;
         if (clk_n == 16) top->reset = 0;
 
         top->clk = 0;

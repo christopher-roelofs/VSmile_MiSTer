@@ -3,7 +3,7 @@ module pll (
 		input  wire  refclk,
 		input  wire  rst,
 		output wire  outclk_0, // 108 MHz: system clock (4 x 27 MHz)
-		output wire  outclk_1, // 108 MHz, -2.5 ns: SDRAM chip clock
+		output wire  outclk_1, // 54 MHz: video
 		output wire  locked
 	);
 
