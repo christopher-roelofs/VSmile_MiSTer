@@ -63,9 +63,9 @@ module vsmile_hw (
     logic [63:0] mem_rdata;
 
     vsmile console (
-        .clk, .reset, .ce, .clk_vid, .pal, .mame_timing, .region, .has_bios, .motion,
+        .clk, .reset, .ce, .clk_vid, .pal, .mame_timing, .region, .has_bios, .motion, .dummy_bios(1'b0),
         .mem_req, .mem_addr, .mem_ack, .mem_rdata, .cart_mask,
-        .joy, .colors, .buttons,
+        .joy, .ud_level(3'd0), .lr_level(3'd0), .colors, .buttons,
         .audio_l, .audio_r, .audio_strobe,
         .vpos, .hpos, .hcnt, .vblank, .out_x, .out_rgb, .out_rgb888, .line_done, .done_y, .ppu_overrun,
         .sim_io_override, .sim_io_rdata, .sim_irq_override, .sim_irq,

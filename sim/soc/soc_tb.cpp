@@ -212,6 +212,12 @@ int main(int argc, char** argv) {
     top->has_bios = bios.empty() ? 0 : 1;
     // MOTION=1: V.Smile Motion (its system ROM in BIOS=, port A reads 0xC000)
     top->motion = getenv("MOTION") ? 1 : 0;
+    // DUMMY_BIOS=1: without BIOS=, the system ROM area reads as veesem's dummy
+    // (as on the MiSTer) instead of 0xFFFF (as in the MAME traces)
+    top->dummy_bios = getenv("DUMMY_BIOS") ? 1 : 0;
+    // STICK_LEVEL=n: joystick level 3..7 on both axes (0/unset: full, as MAME)
+    top->ud_level = getenv("STICK_LEVEL") ? atoi(getenv("STICK_LEVEL")) : 0;
+    top->lr_level = top->ud_level;
     top->cart_mask = cart_words - 1;
 #ifdef HW_TOP
     // bring up the SDRAM controller, then download the cart (and BIOS)
@@ -288,7 +294,12 @@ int main(int argc, char** argv) {
         if (a < 0x3000) return rp.H(soc__DOT__vram)[a - 0x2800];
         if (a < 0x4000) return 0;
         bool bios_sel = (rp.H(cs_mode) & 2) && ((a >> 20) & 3) == 3;
-        if (bios_sel) return bios.empty() ? 0xffff : bios[(a & 0xfffff) % bios.size()];
+        if (bios_sel) {
+            if (!bios.empty()) return bios[(a & 0xfffff) % bios.size()];
+            if (!top->dummy_bios) return 0xffff;
+            uint32_t w = a & 0xfffff;
+            return (w >= 0xfffc0 && w <= 0xfffdb && (w & 1)) ? 0x0031 : 0x0000;
+        }
         uint32_t ca = ((rp.H(cs2) ? 0x400000u : 0u) | a) & (cart_words - 1);
         return cart[ca];
     };

@@ -25,6 +25,7 @@ module vsmile (
     input  logic [4:0]  region,         // [3:0] language, [4] VTech intro
     input  logic        has_bios,       // system ROM loaded
     input  logic        motion,         // V.Smile Motion: its system ROM, port A 0xC000
+    input  logic        dummy_bios,     // no system ROM: veesem's dummy instead of 0xFFFF
 
     output logic        mem_req,        // one-clk issue pulse (up to four out)
     output logic [23:0] mem_addr,
@@ -34,6 +35,8 @@ module vsmile (
 
     // joystick on controller port 1 (port 2 is empty, as MAME's default)
     input  logic [3:0]  joy,            // up, down, left, right
+    input  logic [2:0]  ud_level,       // stick level 3..7 per axis (0: full)
+    input  logic [2:0]  lr_level,
     input  logic [3:0]  colors,         // green, blue, yellow, red
     input  logic [3:0]  buttons,        // ok, quit, help, abc
 
@@ -97,7 +100,7 @@ module vsmile (
     // MAME vsmile_state::uart_rx sends console bytes to both ports; port 2
     // has no device (RTS low)
     vsmile_pad pad1 (
-        .clk, .reset, .ce, .joy, .colors, .buttons,
+        .clk, .reset, .ce, .joy, .ud_level, .lr_level, .colors, .buttons,
         .select(ctrl_select[0]),
         .rx_valid(uart_tx_valid), .rx_data(uart_tx_data),
         .tx_valid(uart_rx_valid), .tx_data(uart_rx_data), .dbg(dbg_pad), .dbg_stale(dbg_pad_stale),
@@ -151,8 +154,13 @@ module vsmile (
     end
 
     // external bus banking; reads go to the SDRAM (mem_*) except the system
-    // ROM area without a BIOS, which reads as 0xFFFF locally.  Data comes
-    // back in issue order, so local completions queue with the others.
+    // ROM area without a BIOS, which is answered locally: 0xFFFF (MAME's
+    // erased region, for the lockstep traces) or, with dummy_bios, the dummy
+    // system ROM of veesem (github.com/sp1187/veesem, ISC licence): zeros,
+    // but the resource pointer table's slots 0-13 (words 0xFFFC0-0xFFFDB)
+    // hold 0x00310000, so games that look resources up find empty data
+    // instead of following a 0xFFFFFFFF pointer.  Data comes back in issue
+    // order, so local completions queue with the others.
     wire bios_sel  = cs_mode[1] && ext_addr[21:20] == 2'b11;
     wire ext_local = bios_sel && !has_bios;
     always_comb begin
@@ -160,6 +168,18 @@ module vsmile (
         else          mem_addr = {1'b0, 23'({cs2, ext_addr}) & cart_mask};
     end
     logic [3:0] lq_local;
+    logic [3:0] lq_d31 [0:3];           // per word of the group: dummy 0x0031
+    logic [3:0] d31;                    // for the read being issued
+    always_comb
+        for (int k = 0; k < 4; k++) begin
+            logic [19:0] w;
+            w = {ext_addr[19:2], 2'(k)};
+            d31[k] = (w >= 20'hFFFC0) && (w <= 20'hFFFDB) && w[0];
+        end
+    wire [3:0] head_d31 = lq_empty ? d31 : lq_d31[lq_h[1:0]];
+    function automatic [15:0] local_word(input logic d);
+        return !dummy_bios ? 16'hffff : d ? 16'h0031 : 16'h0000;
+    endfunction
     logic [2:0] lq_h, lq_t;
     // (an answer may come in the clk of the issue itself with zero-latency
     // memory in simulation: the read being issued is then the head)
@@ -167,7 +187,8 @@ module vsmile (
     wire head_local = lq_empty ? ext_local : lq_local[lq_h[1:0]];
     assign mem_req   = ext_req && !ext_local;
     assign ext_ack   = (!lq_empty || ext_req) && (head_local || mem_ack);
-    assign ext_rdata = head_local ? {4{16'hffff}} : mem_rdata;
+    assign ext_rdata = head_local ? {local_word(head_d31[3]), local_word(head_d31[2]),
+                                     local_word(head_d31[1]), local_word(head_d31[0])} : mem_rdata;
     always_ff @(posedge clk) begin
         if (reset) begin
             lq_h <= 3'd0;
@@ -175,6 +196,7 @@ module vsmile (
         end else begin
             if (ext_req) begin
                 lq_local[lq_t[1:0]] <= ext_local;
+                lq_d31[lq_t[1:0]]   <= d31;
                 lq_t <= lq_t + 3'd1;
             end
             if (ext_ack) lq_h <= lq_h + 3'd1;

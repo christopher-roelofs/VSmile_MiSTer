@@ -8,8 +8,12 @@
 //     a 0x55 keep-alive is queued instead (the pad goes inactive)
 //   - 1 s without traffic queues a 0x55 keep-alive
 //   - probe bytes 0x7x/0xBx from the console are answered with 0xBx
-//   - input changes send 0x80/0x87/0x8F (up/down), 0xC0/0xC7/0xCF
-//     (left/right), 0x90|colours, 0xA0-0xA4 (buttons)
+//   - input changes send 0x80/0x83-0x87/0x8B-0x8F (centre/up/down) and
+//     0xC0/0xC3-0xC7/0xCB-0xCF (centre/right/left), 0x90|colours, 0xA0-0xA4
+//     (buttons).  The real stick has five levels per direction (x3 slight
+//     ... x7 full, vtech.pulkomandy.tk); MAME's pad only sends full, which
+//     is what a level of 0 gives here.  The joystick state is compared as
+//     these codes (MAME compares direction bits: the same for full levels).
 //
 // Structure: an event may want to queue up to eight bytes (MAME does it in
 // one call).  They are staged in fixed slots and a drain writes one per step
@@ -27,6 +31,8 @@ module vsmile_pad (
     input  logic       ce,              // 27 MHz tick (timer base)
 
     input  logic [3:0] joy,             // up, down, left, right
+    input  logic [2:0] ud_level,        // 3..7 (0: full, 7) for up/down
+    input  logic [2:0] lr_level,        // 3..7 (0: full, 7) for left/right
     input  logic [3:0] colors,          // green, blue, yellow, red
     input  logic [3:0] buttons,         // ok, quit, help, abc
 
@@ -55,12 +61,14 @@ module vsmile_pad (
     logic [7:0]  fifo [0:31];
     logic [4:0]  head, tail;
     logic        empty, tx_active, sel;
-    logic [3:0]  sent_joy, sent_colors, sent_buttons;
+    logic [7:0]  sent_ud, sent_lr;
+    logic [3:0]  sent_colors, sent_buttons;
     logic [6:0]  stale;
     logic        active;
     logic [7:0]  probe0, probe1;
     logic [24:0] tx_t, rts_t, idle_t;      // remaining ticks, 0 = not running
-    logic [3:0]  joy_q, colors_q, buttons_q;
+    logic [7:0]  ud_q, lr_q;
+    logic [3:0]  colors_q, buttons_q;
 
     // staged bytes: slot 0 up/down, 1 left/right, 2 colours, 3-6 buttons
     // A1..A4, 7 A0 / probe reply / keep-alive
@@ -74,11 +82,13 @@ module vsmile_pad (
     // inputs resampled on ce
     logic        sel_c;
     logic [3:0]  joy_c, colors_c, buttons_c;
+    logic [2:0]  udl_c, lrl_c;
 
     // working copies for the event block
     logic [4:0]  v_head, v_tail;
     logic        v_empty, v_tx_active, v_sel, v_rts, v_rts_evt;
-    logic [3:0]  v_sent_joy, v_sent_colors, v_sent_buttons;
+    logic [7:0]  v_sent_ud, v_sent_lr;
+    logic [3:0]  v_sent_colors, v_sent_buttons;
     logic [6:0]  v_stale;
     logic        v_active;
     logic [7:0]  v_probe0, v_probe1;
@@ -97,19 +107,26 @@ module vsmile_pad (
         s_idle_reset = 1'b1;
     endtask
 
-    function automatic logic [7:0] ud_code(input logic [3:0] j);
-        return j[0] ? 8'h87 : j[1] ? 8'h8f : 8'h80;
+    function automatic logic [7:0] ud_code(input logic [3:0] j, input logic [2:0] l);
+        logic [2:0] v;
+        v = (l == 3'd0) ? 3'd7 : l;
+        return j[0] ? {5'b10000, v} : j[1] ? {5'b10001, v} : 8'h80;
     endfunction
-    function automatic logic [7:0] lr_code(input logic [3:0] j);
-        return j[2] ? 8'hcf : j[3] ? 8'hc7 : 8'hc0;
+    function automatic logic [7:0] lr_code(input logic [3:0] j, input logic [2:0] l);
+        logic [2:0] v;
+        v = (l == 3'd0) ? 3'd7 : l;
+        return j[2] ? {5'b11001, v} : j[3] ? {5'b11000, v} : 8'hc0;
     endfunction
+    wire [7:0] cur_ud = ud_code(joy_c, udl_c);
+    wire [7:0] cur_lr = lr_code(joy_c, lrl_c);
 
     // vsmile_pad_device::tx_complete
     task automatic tx_complete;
         if ((v_stale & ST_JOY) != 0) begin
-            v_sent_joy = joy_c;
-            if ((v_stale & ST_UD) != 0) push(0, ud_code(joy_c));
-            if ((v_stale & ST_LR) != 0) push(1, lr_code(joy_c));
+            v_sent_ud = cur_ud;
+            v_sent_lr = cur_lr;
+            if ((v_stale & ST_UD) != 0) push(0, cur_ud);
+            if ((v_stale & ST_LR) != 0) push(1, cur_lr);
         end
         if ((v_stale & ST_COLORS) != 0) begin
             v_sent_colors = colors_c;
@@ -150,6 +167,7 @@ module vsmile_pad (
         else if (ce) rx_seen <= 1'b0;
         if (ce) begin
             sel_c <= select; joy_c <= joy; colors_c <= colors; buttons_c <= buttons;
+            udl_c <= ud_level; lrl_c <= lr_level;
         end
     end
 
@@ -158,10 +176,10 @@ module vsmile_pad (
         rts_evt  <= 1'b0;
         if (reset) begin
             head <= 0; tail <= 0; empty <= 1'b1; tx_active <= 1'b0; sel <= 1'b0; rts <= 1'b0;
-            sent_joy <= 0; sent_colors <= 0; sent_buttons <= 0;
+            sent_ud <= 8'h80; sent_lr <= 8'hc0; sent_colors <= 0; sent_buttons <= 0;
             stale <= ST_ALL; active <= 1'b0; probe0 <= 0; probe1 <= 0;
             tx_t <= 0; rts_t <= 0; idle_t <= 25'(IDLE_PERIOD);   // device_start
-            joy_q <= 0; colors_q <= 0; buttons_q <= 0;
+            ud_q <= 8'h80; lr_q <= 8'hc0; colors_q <= 0; buttons_q <= 0;
             slot_v <= 8'd0; rx_pend <= 1'b0;
             tx_valid <= 1'b0; rts_evt <= 1'b0;
         end else if (!ce) begin
@@ -172,7 +190,7 @@ module vsmile_pad (
             logic [7:0]  rxd;
             v_head = head; v_tail = tail; v_empty = empty;
             v_tx_active = tx_active; v_sel = sel; v_rts = rts; v_rts_evt = 1'b0;
-            v_sent_joy = sent_joy; v_sent_colors = sent_colors; v_sent_buttons = sent_buttons;
+            v_sent_ud = sent_ud; v_sent_lr = sent_lr; v_sent_colors = sent_colors; v_sent_buttons = sent_buttons;
             v_stale = stale; v_active = active; v_probe0 = probe0; v_probe1 = probe1;
             v_tx_t = tx_t; v_rts_t = rts_t; v_idle_t = idle_t;
             v_out_valid = 1'b0; v_out = 8'd0;
@@ -263,14 +281,15 @@ module vsmile_pad (
 
             // input changes (PORT_CHANGED_MEMBER handlers)
             if (v_slot == 8'd0) begin
-            if (joy_c != joy_q && v_active) begin
+            if ((cur_ud != ud_q || cur_lr != lr_q) && v_active) begin
                 if (!v_empty) begin
-                    if ((joy_c ^ joy_q) & 4'b0011) v_stale = v_stale | ST_UD;
-                    if ((joy_c ^ joy_q) & 4'b1100) v_stale = v_stale | ST_LR;
+                    if (cur_ud != ud_q) v_stale = v_stale | ST_UD;
+                    if (cur_lr != lr_q) v_stale = v_stale | ST_LR;
                 end else begin
-                    if ((joy_c ^ v_sent_joy) & 4'b0011) push(0, ud_code(joy_c));
-                    if ((joy_c ^ v_sent_joy) & 4'b1100) push(1, lr_code(joy_c));
-                    v_sent_joy = joy_c;
+                    if (cur_ud != v_sent_ud) push(0, cur_ud);
+                    if (cur_lr != v_sent_lr) push(1, cur_lr);
+                    v_sent_ud = cur_ud;
+                    v_sent_lr = cur_lr;
                 end
             end
             if (colors_c != colors_q && v_active) begin
@@ -294,14 +313,14 @@ module vsmile_pad (
                     v_sent_buttons = buttons_c;
                 end
             end
-            joy_q <= joy_c; colors_q <= colors_c; buttons_q <= buttons_c;
+            ud_q <= cur_ud; lr_q <= cur_lr; colors_q <= colors_c; buttons_q <= buttons_c;
             end
 
             if (s_idle_reset) v_idle_t = 25'd0;
 
             head <= v_head; tail <= v_tail; empty <= v_empty;
             tx_active <= v_tx_active; sel <= v_sel; rts <= v_rts; rts_evt <= v_rts_evt;
-            sent_joy <= v_sent_joy; sent_colors <= v_sent_colors; sent_buttons <= v_sent_buttons;
+            sent_ud <= v_sent_ud; sent_lr <= v_sent_lr; sent_colors <= v_sent_colors; sent_buttons <= v_sent_buttons;
             stale <= v_stale; active <= v_active; probe0 <= v_probe0; probe1 <= v_probe1;
             tx_t <= v_tx_t; rts_t <= v_rts_t; idle_t <= v_idle_t;
             tx_valid <= v_out_valid;

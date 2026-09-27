@@ -15,6 +15,8 @@
 # MAME_BIOS=n selects a real system ROM (1 = vsmile_v102.bin from
 # roms/mame/vsmile); some carts call into the BIOS.  MAME_SYSTEM=vsmilem
 # traces a V.Smile Motion (MAME_BIOS=0: roms/bios/vsmilemotion.bin).
+# MAME_CTRL1=smartkb_us (etc.) plugs another controller into port 1;
+# TRACE_INPUT=file.lua runs an input script too (e.g. scripts/kbd_input.lua).
 # MAME=path selects the MAME binary (default: `mame` on PATH).  The trace
 # must come from the same MAME revision as ref/mame (see MAME_REVISION):
 # 0.264's SPU differs from current git in channel start/stop semantics.
@@ -58,13 +60,14 @@ for i, r in ipairs(ranges) do
     end)
 end
 
+${TRACE_INPUT:+dofile([[$TRACE_INPUT]])}
 manager.machine.debugger:command('trace $out/cpu.tr,maincpu,noloop,{tracelog "%04X %04X %04X %04X %04X %04X %04X ",r1,r2,r3,r4,sp,bp,sr}')
 manager.machine.debugger.execution_state = "run"
 EOF
 
 cd "$out"
 timeout -s KILL "${TRACE_TIMEOUT:-300}" env SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy \
-"${MAME:-mame}" "${MAME_SYSTEM:-vsmile}" -rompath "$rompath" -cart "$cart" ${MAME_BIOS:+-bios "$MAME_BIOS"} \
+"${MAME:-mame}" "${MAME_SYSTEM:-vsmile}" -rompath "$rompath" -cart "$cart" ${MAME_BIOS:+-bios "$MAME_BIOS"} ${MAME_CTRL1:+-ctrl1 "$MAME_CTRL1"} \
     -video none -sound none -nothrottle -window -noreadconfig -skip_gameinfo \
     -seconds_to_run "$secs" \
     -debug -debugger none -autoboot_script "$out/trace.lua" \

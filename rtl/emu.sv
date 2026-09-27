@@ -313,7 +313,21 @@ endcase
 // 8=OK 9=Quit 10=Help 11=ABC.  Pad bit order follows MAME's ports.  The
 // left analog stick moves the V.Smile joystick as well as the d-pad does.
 wire signed [7:0] ax = joystick_l_analog_0[7:0], ay = joystick_l_analog_0[15:8];
-wire a_r = ax >  8'sd48, a_l = ax < -8'sd48, a_d = ay >  8'sd48, a_u = ay < -8'sd48;
+// The real V.Smile stick reports five levels per direction (codes x3..x7):
+// the analog stick's tilt past a deadzone is graded into them; the d-pad
+// sends full (level 0 = full in vsmile_pad).
+wire [6:0] mx = ax[7] ? ((ax == -8'sd128) ? 7'd127 : 7'(-ax)) : 7'(ax);
+wire [6:0] my = ay[7] ? ((ay == -8'sd128) ? 7'd127 : 7'(-ay)) : 7'(ay);
+wire a_r = !ax[7] && mx >= 7'd24, a_l = ax[7] && mx >= 7'd24;
+wire a_d = !ay[7] && my >= 7'd24, a_u = ay[7] && my >= 7'd24;
+function automatic [2:0] stick_level(input [6:0] m);
+    stick_level = (m < 7'd44) ? 3'd3 : (m < 7'd64) ? 3'd4 : (m < 7'd84) ? 3'd5 : (m < 7'd104) ? 3'd6 : 3'd7;
+endfunction
+reg [2:0] ud_level_s, lr_level_s;
+always @(posedge clk_sys) begin
+    ud_level_s <= (joystick_0[2] | joystick_0[3]) ? 3'd0 : (a_u | a_d) ? stick_level(my) : 3'd0;
+    lr_level_s <= (joystick_0[0] | joystick_0[1]) ? 3'd0 : (a_l | a_r) ? stick_level(mx) : 3'd0;
+end
 reg [3:0] joy_s, colors_s, buttons_s;
 always @(posedge clk_sys) begin
     joy_s     <= {joystick_0[0] | a_r, joystick_0[1] | a_l, joystick_0[2] | a_d, joystick_0[3] | a_u};  // right left down up
@@ -347,6 +361,7 @@ vsmile console
     .region     ({~status[7], lang}),
     .has_bios   (motion ? has_bios_motion : has_bios_std),
     .motion     (motion),
+    .dummy_bios (1'b1),
 
     .mem_req    (mem_req),
     .mem_addr   (mem_addr),
@@ -355,6 +370,8 @@ vsmile console
     .cart_mask  (cart_mask),
 
     .joy        (joy_s),
+    .ud_level   (ud_level_s),
+    .lr_level   (lr_level_s),
     .colors     (colors_s),
     .buttons    (buttons_s),
 
