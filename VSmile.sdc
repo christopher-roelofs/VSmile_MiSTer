@@ -9,3 +9,7 @@ derive_clock_uncertainty
 # four clocks (the resampled inputs and the drain also update on that tick).
 set_multicycle_path -setup 4 -from [get_registers {*vsmile_pad:pad1|*}] -to [get_registers {*vsmile_pad:pad1|*}]
 set_multicycle_path -hold  3 -from [get_registers {*vsmile_pad:pad1|*}] -to [get_registers {*vsmile_pad:pad1|*}]
+
+# The Smart Keyboard model steps the same way (vsmile_kbd, 27 MHz tick).
+set_multicycle_path -setup 4 -from [get_registers {*vsmile_kbd:kbd1|*}] -to [get_registers {*vsmile_kbd:kbd1|*}]
+set_multicycle_path -hold  3 -from [get_registers {*vsmile_kbd:kbd1|*}] -to [get_registers {*vsmile_kbd:kbd1|*}]
