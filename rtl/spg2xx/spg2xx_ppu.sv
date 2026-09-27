@@ -107,7 +107,9 @@ module spg2xx_ppu (
     wire [21:0] pg_gfx     = {regs[page ? 8'h21 : 8'h20], 6'd0};
     wire [21:0] spr_gfx    = {regs[8'h22], 6'd0};
     wire [15:0] spr_ctrl   = regs[8'h42];
-    wire [5:0]  blendlevel = {1'b0, regs[8'h2a][1:0], 3'b000} + 6'd8;   // 8,16,24,32
+    // blend level 8,16,24,32 (registered: games set 0x2A between frames)
+    logic [5:0] blendlevel;
+    always_ff @(posedge clk) blendlevel <= {1'b0, regs[8'h2a][1:0], 3'b000} + 6'd8;
 
     // ------------------------------------------------------------------
     // Renderer state

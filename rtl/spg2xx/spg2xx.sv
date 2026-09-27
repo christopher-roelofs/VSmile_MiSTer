@@ -468,7 +468,15 @@ module spg2xx (
         end else begin
 
             case (ast)
-            A_IDLE: if (go) begin
+            A_IDLE: begin
+              // the register-access latch loads on every idle clk (it is only
+              // used in A_REG), keeping the address decode off its enable
+              rq_addr  <= q_addr[15:0];
+              rq_wdata <= q_wdata;
+              rq_rd    <= q_rd;
+              rq_wr    <= q_wr;
+              rq_cpu   <= sel_cpu;
+              if (go) begin
                 owner <= sel_spu ? 2'd2 : sel_ppu ? 2'd3 : sel_dma ? 2'd1 : 2'd0;
                 if (sel_dma) dma_wait <= 1'b1;
                 if (is_audio) begin
@@ -485,14 +493,10 @@ module spg2xx (
                     ext_sel  <= q_addr[1:0];
                     ast      <= A_CHK;
                 end else begin
-                    // registers / unmapped: latch, perform next clk
-                    rq_addr  <= q_addr[15:0];
-                    rq_wdata <= q_wdata;
-                    rq_rd    <= q_rd;
-                    rq_wr    <= q_wr;
-                    rq_cpu   <= sel_cpu;
+                    // registers / unmapped: latched above, performed next clk
                     ast      <= A_REG;
                 end
+              end
             end
             A_REG: begin
                 // reads: value latched here (side effects of the read strobe

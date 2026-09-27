@@ -15,3 +15,4 @@ build.log
 c5_pin_model_dump.txt
 jtag.cdf
 PLLJ_PLLSPE_INFO.txt
+other/

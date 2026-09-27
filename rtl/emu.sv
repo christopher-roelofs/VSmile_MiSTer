@@ -51,13 +51,14 @@ localparam CONF_STR = {
     "O[2],TV Mode,NTSC,PAL;",
     "O[6:3],Region,US,UK,French,German,Spanish,Italian,Dutch,Portuguese,Chinese;",
     "O[7],VTech Intro,On,Off;",
-    "O[10],Console,V.Smile,V.Smile Motion;",
+    "O[13:12],Console,Auto,V.Smile,V.Smile Motion;",
     "O[11],Audio,Stereo,Mono (Pocket);",
     "O[9:8],Debug,Off,SDRAM reads,Console;",
     "-;",
     "R0,Reset;",
     "J1,Green,Blue,Yellow,Red,OK,Quit,Help,ABC;",
     "jn,B,X,Y,L,A,Select,R,Start;",
+    "I,V.Smile Baby cartridge|not supported yet;",
     "V,v0.1.",`BUILD_DATE
 };
 
@@ -99,6 +100,8 @@ wire  [7:0] ioctl_dout;
 wire  [7:0] ioctl_index;
 reg         ioctl_wait;
 
+reg         baby_info_req = 0;      // (V.Smile Baby cart message, below)
+
 hps_io #(.CONF_STR(CONF_STR)) hps_io
 (
     .clk_sys         (clk_sys),
@@ -109,6 +112,8 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
     .buttons         (buttons),
     .status          (status),
     .forced_scandoubler(forced_scandoubler),
+    .info_req        (baby_info_req),
+    .info            (8'd1),
 
     .joystick_0      (joystick_0),
     .joystick_l_analog_0(joystick_l_analog_0),
@@ -135,13 +140,58 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 
 wire        dl_is_motion = (ioctl_index == 8'h80) || (ioctl_index == 3);
 wire        dl_is_bios   = (ioctl_index == 0) || (ioctl_index == 2) || dl_is_motion;
-wire        motion       = status[10];
+// Console: Auto picks the V.Smile Motion for a Motion cart when its system
+// ROM is loaded.  Motion carts carry VTech's PC-software record
+// "V.Smile\084nnn ...\Info.XML" (product numbers 80-084xxx), one character
+// per 16-bit word; the download is scanned for it (like the Game Boy core's
+// CGB-flag detection, the download holds the console in reset).
+reg         cart_motion = 0;
+// V.Smile Baby carts (SPG28x console, not emulated): their reset vector
+// (word 0xFFF7) is 0x4EE6-0x5B22 in every known Baby cart and 0xA425-0xF993
+// in every standard/Motion cart, so a vector below 0x8000 marks one.  The
+// console is held in reset and the MiSTer shows a message.
+reg         cart_baby = 0;
+reg  [7:0]  vec_lo;
+wire        motion = (status[13:12] == 2'd0) ? (cart_motion && has_bios_motion) : (status[13:12] == 2'd2);
 reg  [7:0]  dl_lo;
 reg         dl_req;
 reg  [23:0] dl_waddr;
 reg  [15:0] dl_wdata;
 reg  [22:0] cart_mask = 23'h3fffff;   // words - 1 (default 8 MB)
 reg         has_bios_std = 0, has_bios_motion = 0;
+
+// "V.Smile\084" as little-endian 16-bit characters
+function automatic [7:0] motion_pat(input [4:0] i);
+    case (i)
+        5'd0:  motion_pat = "V";   5'd2:  motion_pat = ".";  5'd4:  motion_pat = "S";
+        5'd6:  motion_pat = "m";   5'd8:  motion_pat = "i";  5'd10: motion_pat = "l";
+        5'd12: motion_pat = "e";   5'd14: motion_pat = 8'h5c; 5'd16: motion_pat = "0";
+        5'd18: motion_pat = "8";   5'd20: motion_pat = "4";
+        default: motion_pat = 8'h00;
+    endcase
+endfunction
+reg [4:0] mpos;
+reg       dl_q;
+always @(posedge clk_sys) begin
+    dl_q <= ioctl_download;
+    baby_info_req <= 0;
+    if (!ioctl_download && dl_q && cart_baby) baby_info_req <= 1;   // download done
+    if (ioctl_download && ioctl_wr && !dl_is_bios) begin
+        if (ioctl_addr == 25'h1FFEE) vec_lo <= ioctl_dout;
+        if (ioctl_addr == 25'h1FFEF) cart_baby <= ({ioctl_dout, vec_lo} >= 16'h4000) && ({ioctl_dout, vec_lo} < 16'h8000);
+    end
+    if (ioctl_download && !dl_q && !dl_is_bios) begin
+        mpos        <= 0;
+        cart_motion <= 0;
+        cart_baby   <= 0;
+    end else if (ioctl_download && ioctl_wr && !dl_is_bios) begin
+        if (ioctl_dout == motion_pat(mpos)) begin
+            if (mpos == 5'd21) cart_motion <= 1;
+            mpos <= (mpos == 5'd21) ? 5'd0 : mpos + 1'd1;
+        end else
+            mpos <= (ioctl_dout == "V") ? 5'd1 : 5'd0;
+    end
+end
 reg  [24:0] cart_bytes;
 
 always @(posedge clk_sys) begin
@@ -242,7 +292,7 @@ sdram sdram
 
 // registered: this net fans out to every flop in the design
 reg [1:0] rst_sync = 2'b11;
-always @(posedge clk_sys) rst_sync <= {rst_sync[0], RESET | status[0] | buttons[1] | ~pll_locked | ioctl_download};
+always @(posedge clk_sys) rst_sync <= {rst_sync[0], RESET | status[0] | buttons[1] | ~pll_locked | ioctl_download | cart_baby};
 wire reset = rst_sync[1];
 
 // region code on port C (MAME vsmile REGION dip)
