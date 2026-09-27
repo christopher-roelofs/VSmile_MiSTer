@@ -24,6 +24,7 @@ module vsmile (
     input  logic        mame_timing,
     input  logic [4:0]  region,         // [3:0] language, [4] VTech intro
     input  logic        has_bios,       // system ROM loaded
+    input  logic        motion,         // V.Smile Motion: its system ROM, port A 0xC000
 
     output logic        mem_req,        // one-clk issue pulse (up to four out)
     output logic [23:0] mem_addr,
@@ -121,7 +122,7 @@ module vsmile (
     spg2xx soc (
         .clk, .reset, .ce, .clk_vid, .pal, .mame_timing,
         .ext_req, .ext_wr, .ext_addr, .ext_wdata, .ext_ack, .ext_rdata, .cs_mode,
-        .porta_in(16'h0000), .portb_in, .portc_in,
+        .porta_in(motion ? 16'hC000 : 16'h0000), .portb_in, .portc_in,   // MAME vsmilem porta_r
         .porta_out(), .portb_out, .portc_out,
         .porta_oe(), .portb_oe, .portc_oe, .port_wr,
         .uart_tx_valid, .uart_tx_data, .uart_rx_valid, .uart_rx_data,
@@ -155,7 +156,7 @@ module vsmile (
     wire bios_sel  = cs_mode[1] && ext_addr[21:20] == 2'b11;
     wire ext_local = bios_sel && !has_bios;
     always_comb begin
-        if (bios_sel) mem_addr = {4'h8, ext_addr[19:0]};
+        if (bios_sel) mem_addr = {3'b100, motion, ext_addr[19:0]};
         else          mem_addr = {1'b0, 23'({cs2, ext_addr}) & cart_mask};
     end
     logic [3:0] lq_local;

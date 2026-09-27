@@ -11,6 +11,7 @@ module vsmile_hw (
     input  logic        mame_timing,
     input  logic [4:0]  region,
     input  logic        has_bios,
+    input  logic        motion,
     input  logic [22:0] cart_mask,
 
     input  logic        sdram_init,
@@ -62,7 +63,7 @@ module vsmile_hw (
     logic [63:0] mem_rdata;
 
     vsmile console (
-        .clk, .reset, .ce, .clk_vid, .pal, .mame_timing, .region, .has_bios,
+        .clk, .reset, .ce, .clk_vid, .pal, .mame_timing, .region, .has_bios, .motion,
         .mem_req, .mem_addr, .mem_ack, .mem_rdata, .cart_mask,
         .joy, .colors, .buttons,
         .audio_l, .audio_r, .audio_strobe,

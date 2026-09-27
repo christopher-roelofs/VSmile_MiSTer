@@ -240,6 +240,10 @@ module spg2xx (
     logic [15:0] dma_len, dma_j;
     logic [15:0] dma_data;
     logic        dma_wait;
+    // the current word's source / destination: dma_src + j and the
+    // destination + j, kept as pointers stepped with j (no adder on the
+    // bus address path)
+    logic [21:0] dma_rp, dma_wp;
     logic [15:0] sysdma [0:3];
 
     // The CPU's request is combinational from its state: take a registered
@@ -272,9 +276,7 @@ module spg2xx (
     wire [21:0]  q_addr  = sel_spu ? spu_mem_addr
                          : sel_ppu ? ppu_mem_addr
                          : !dma_active ? c_addr
-                         : (dst == D_RD) ? dma_src + 22'(dma_j)
-                         : dma_sprite ? 22'h2c00 + 22'(dma_dst) + 22'(dma_j[9:0])
-                         : {8'd0, 14'(dma_dst + dma_j[13:0])};
+                         : (dst == D_RD) ? dma_rp : dma_wp;
     wire         q_rd    = sel_rt ? 1'b1 : !dma_active ? c_rd : (dst == D_RD);
     wire         q_wr    = sel_rt ? 1'b0 : !dma_active ? c_wr : (dst == D_WR);
     wire [15:0]  q_wdata = !dma_active ? c_wdata : dma_data;
@@ -504,6 +506,8 @@ module spg2xx (
                         dma_sprite <= 1'b0;
                         dma_src    <= {sysdma[1][5:0], sysdma[0]};
                         dma_dst    <= sysdma[3][13:0];
+                        dma_rp     <= {sysdma[1][5:0], sysdma[0]};
+                        dma_wp     <= {8'd0, sysdma[3][13:0]};
                         dma_len    <= rq_wdata;
                         dma_j      <= 16'd0;
                         dst        <= (rq_wdata == 16'd0) ? D_IDLE : D_RD;
@@ -514,6 +518,8 @@ module spg2xx (
                     dma_sprite <= 1'b1;
                     dma_src    <= {8'd0, vregs[8'h70][13:0]};
                     dma_dst    <= {4'd0, vregs[8'h71][9:0]};
+                    dma_rp     <= {8'd0, vregs[8'h70][13:0]};
+                    dma_wp     <= 22'h2c00 + 22'(vregs[8'h71][9:0]);
                     dma_len    <= (rq_wdata[9:0] != 0) ? {6'd0, rq_wdata[9:0]} : 16'h400;
                     dma_j      <= 16'd0;
                     dst        <= D_RD;
@@ -618,6 +624,8 @@ module spg2xx (
                         end
                     end else begin
                         dma_j <= dma_j + 16'd1;
+                        dma_rp <= dma_rp + 22'd1;
+                        dma_wp <= dma_sprite ? dma_wp + 22'd1 : {8'd0, dma_wp[13:0] + 14'd1};
                         dst   <= D_RD;
                     end
                 end

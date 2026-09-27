@@ -33,7 +33,7 @@ assign LED_DISK      = 0;
 assign BUTTONS       = 0;
 
 assign AUDIO_S       = 1;
-assign AUDIO_MIX     = 0;
+assign AUDIO_MIX     = status[11] ? 2'd3 : 2'd0;   // 3: full mono mix (the Pocket's speaker)
 
 assign VIDEO_ARX     = 13'd4;
 assign VIDEO_ARY     = 13'd3;
@@ -46,10 +46,13 @@ localparam CONF_STR = {
     "VSmile;;",
     "F1,BIN,Load Cartridge;",
     "F2,BIN,Load BIOS;",
+    "F3,BIN,Load Motion BIOS;",
     "-;",
     "O[2],TV Mode,NTSC,PAL;",
     "O[6:3],Region,US,UK,French,German,Spanish,Italian,Dutch,Portuguese,Chinese;",
     "O[7],VTech Intro,On,Off;",
+    "O[10],Console,V.Smile,V.Smile Motion;",
+    "O[11],Audio,Stereo,Mono (Pocket);",
     "O[9:8],Debug,Off,SDRAM reads,Console;",
     "-;",
     "R0,Reset;",
@@ -125,15 +128,20 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 // first, for both the cartridge and the system ROM (MAME's ROM_REVERSE on
 // the sysrom cancels against the CPU's big-endian region: the CPU sees the
 // dump's bytes low first, as verified against a trace that reads it).
-// BIOS is index 0 (boot0.rom auto-load) or 2 (OSD), cartridges index 1.
+// Index (bootN.rom auto-loads as N * 64): system ROM 0 (boot0.rom) or 2
+// (OSD), V.Smile Motion system ROM 0x80 (boot2.rom) or 3 (OSD), cartridge
+// 0x40 (boot1.rom) or 1 (OSD).  Word addresses: cart 0x000000, system ROM
+// 0x800000, Motion system ROM 0x900000.
 
-wire        dl_is_bios = (ioctl_index == 0) || (ioctl_index == 2);
+wire        dl_is_motion = (ioctl_index == 8'h80) || (ioctl_index == 3);
+wire        dl_is_bios   = (ioctl_index == 0) || (ioctl_index == 2) || dl_is_motion;
+wire        motion       = status[10];
 reg  [7:0]  dl_lo;
 reg         dl_req;
 reg  [23:0] dl_waddr;
 reg  [15:0] dl_wdata;
 reg  [22:0] cart_mask = 23'h3fffff;   // words - 1 (default 8 MB)
-reg         has_bios = 0;
+reg         has_bios_std = 0, has_bios_motion = 0;
 reg  [24:0] cart_bytes;
 
 always @(posedge clk_sys) begin
@@ -141,7 +149,7 @@ always @(posedge clk_sys) begin
     if (ioctl_download && ioctl_wr) begin
         if (!ioctl_addr[0]) dl_lo <= ioctl_dout;
         else begin
-            dl_waddr   <= {dl_is_bios, ioctl_addr[23:1]};
+            dl_waddr   <= dl_is_bios ? {3'b100, dl_is_motion, ioctl_addr[20:1]} : {1'b0, ioctl_addr[23:1]};
             dl_wdata   <= {ioctl_dout, dl_lo};    // BIOS and cart: low byte first
             dl_req     <= 1;
             ioctl_wait <= 1;
@@ -151,7 +159,8 @@ always @(posedge clk_sys) begin
     // busy in the clk after it is raised)
     else if (ioctl_wait && !dl_req && !wr_busy) ioctl_wait <= 0;
     if (ioctl_download) begin
-        if (dl_is_bios) has_bios <= 1;
+        if (dl_is_motion) has_bios_motion <= 1;
+        else if (dl_is_bios) has_bios_std <= 1;
         else cart_bytes <= ioctl_addr + 1'd1;
     end
 end
@@ -239,13 +248,13 @@ wire reset = rst_sync[1];
 // region code on port C (MAME vsmile REGION dip)
 reg [3:0] lang;
 always @(*) case (status[6:3])
-    4'd1:    lang = 4'hE;   // UK
+    4'd1:    lang = motion ? 4'h5 : 4'hE;   // UK (the Motion has no 0xE: English 0x5)
     4'd2:    lang = 4'hD;   // French
     4'd3:    lang = 4'hB;   // German
     4'd4:    lang = 4'hC;   // Spanish
     4'd5:    lang = 4'h2;   // Italian
     4'd6:    lang = 4'h9;   // Dutch
-    4'd7:    lang = 4'h8;   // Portuguese
+    4'd7:    lang = 4'h8;   // Portuguese (Motion: Mexico)
     4'd8:    lang = 4'h7;   // Chinese
     default: lang = 4'hF;   // US
 endcase
@@ -286,7 +295,8 @@ vsmile console
     .pal        (status[2]),
     .mame_timing(1'b0),
     .region     ({~status[7], lang}),
-    .has_bios   (has_bios),
+    .has_bios   (motion ? has_bios_motion : has_bios_std),
+    .motion     (motion),
 
     .mem_req    (mem_req),
     .mem_addr   (mem_addr),

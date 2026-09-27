@@ -70,10 +70,10 @@ module spg2xx_spu (
     // ------------------------------------------------------------------
     // Storage
     // ------------------------------------------------------------------
-    logic [15:0] creg [0:511];
+    logic [15:0] creg [0:511] /* verilator public_flat_rd */;
     logic [15:0] preg [0:511];
     logic [15:0] xmisc [0:1023];          // control regs >= 0x20 (plain storage)
-    logic [15:0] x [0:31];                // control regs 0x00-0x1F
+    logic [15:0] x [0:31] /* verilator public_flat_rd */;              // control regs 0x00-0x1F
 
     // engine-private per-channel state
     logic [18:0] acc     [0:15];          // rate accumulator (MAME m_channel_rate_accum)

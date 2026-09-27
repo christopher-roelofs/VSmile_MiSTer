@@ -12,6 +12,9 @@
 #            "R|W addr data"; the testbench replays register reads from this
 #            log so the CPU can be verified before any peripheral exists.
 #
+# MAME_BIOS=n selects a real system ROM (1 = vsmile_v102.bin from
+# roms/mame/vsmile); some carts call into the BIOS.  MAME_SYSTEM=vsmilem
+# traces a V.Smile Motion (MAME_BIOS=0: roms/bios/vsmilemotion.bin).
 # MAME=path selects the MAME binary (default: `mame` on PATH).  The trace
 # must come from the same MAME revision as ref/mame (see MAME_REVISION):
 # 0.264's SPU differs from current git in channel start/stop semantics.
@@ -27,7 +30,9 @@ secs=${3:-1}
 
 here=$(cd "$(dirname "$0")/.." && pwd)
 rompath="$here/roms/mame"
-mkdir -p "$out" "$rompath/vsmile"
+mkdir -p "$out" "$rompath/vsmile" "$rompath/vsmilem"
+[ -f "$rompath/vsmilem/vsmilemotion.bin" ] || cp "$here/roms/bios/vsmilemotion.bin" "$rompath/vsmilem/" 2>/dev/null
+[ -f "$rompath/vsmilem/vmotionbios.bin" ] || cp "$here/roms/bios/vmotionbios.bin" "$rompath/vsmilem/" 2>/dev/null
 echo "$cart" > "$out/cart"
 "${MAME:-mame}" -version > "$out/mame_version" 2>/dev/null || true
 if [ ! -f "$rompath/vsmile/vsmile_v103.bin" ]; then
@@ -59,7 +64,7 @@ EOF
 
 cd "$out"
 timeout -s KILL "${TRACE_TIMEOUT:-300}" env SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy \
-"${MAME:-mame}" vsmile -rompath "$rompath" -cart "$cart" ${MAME_BIOS:+-bios "$MAME_BIOS"} \
+"${MAME:-mame}" "${MAME_SYSTEM:-vsmile}" -rompath "$rompath" -cart "$cart" ${MAME_BIOS:+-bios "$MAME_BIOS"} \
     -video none -sound none -nothrottle -window -noreadconfig -skip_gameinfo \
     -seconds_to_run "$secs" \
     -debug -debugger none -autoboot_script "$out/trace.lua" \

@@ -210,6 +210,8 @@ int main(int argc, char** argv) {
     top->mame_timing = 1;
     top->region = 0x1f;                 // English (US), VTech intro on
     top->has_bios = bios.empty() ? 0 : 1;
+    // MOTION=1: V.Smile Motion (its system ROM in BIOS=, port A reads 0xC000)
+    top->motion = getenv("MOTION") ? 1 : 0;
     top->cart_mask = cart_words - 1;
 #ifdef HW_TOP
     // bring up the SDRAM controller, then download the cart (and BIOS)
@@ -227,7 +229,7 @@ int main(int argc, char** argv) {
         for (int i = 0; i < 3; i++) { top->clk = 0; top->eval(); top->clk = 1; top->eval(); }
     };
     for (uint32_t i = 0; i < cart.size(); i++) dl_word(i, cart[i]);
-    for (uint32_t i = 0; i < bios.size(); i++) dl_word(0x800000 + i, bios[i]);
+    for (uint32_t i = 0; i < bios.size(); i++) dl_word((getenv("MOTION") ? 0x900000 : 0x800000) + i, bios[i]);
     while (top->wr_busy) { top->clk = 0; top->eval(); top->clk = 1; top->eval(); }
     printf("downloaded %u cart words into the SDRAM model\n", (unsigned)cart.size());
 #endif
