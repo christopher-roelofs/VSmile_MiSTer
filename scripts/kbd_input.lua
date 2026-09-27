@@ -1,6 +1,6 @@
 -- Scripted typing on a V.Smile Smart Keyboard for MAME traces
 -- (scripts/mame_trace.sh with MAME_CTRL1=smartkb_us TRACE_INPUT=this file).
--- From frame 360, every 30 frames one key of the list is held for 8 frames;
+-- From frame $KBD_START (default 360), every 30 frames one key of the list is held for 8 frames;
 -- every event is logged to $KBD_LOG as "<frame> <row> <col> <1|0>" (matrix
 -- position as in MAME's keyboard ROW0-4 ports, bit = column) so a testbench
 -- can replay the same keys at the same frames.  Row 5 is the BUTTONS port
@@ -31,15 +31,17 @@ local function field(row, col)
         if f.mask == (1 << col) then return f end
     end
 end
+local KBD_START = tonumber(os.getenv("KBD_START") or "360")
 local held, idx = nil, 1
+local fr = 0
 kbd_sub = emu.add_machine_frame_notifier(function()
-    local fr = manager.machine.video.frame_number
+    fr = fr + 1
     if held and fr % 30 == 8 then
         held.f:set_value(0)
         klog:write(string.format("%d %d %d 0\n", fr, held.r, held.c)); klog:flush()
         held = nil
     end
-    if fr >= 360 and fr % 30 == 0 and idx <= #keys then
+    if fr >= KBD_START and fr % 30 == 0 and idx <= #keys then
         local k = keys[idx]; idx = idx + 1
         local f = field(k[1], k[2])
         if f then

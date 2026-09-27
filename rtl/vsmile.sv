@@ -37,6 +37,10 @@ module vsmile (
     input  logic [3:0]  joy,            // up, down, left, right
     input  logic [2:0]  ud_level,       // stick level 3..7 per axis (0: full)
     input  logic [2:0]  lr_level,
+    // Smart Keyboard on controller port 1 instead of the joystick
+    input  logic        kbd,
+    input  logic [12:0] kb_keys [0:4],  // key matrix, rows as MAME's ROW0-4
+    input  logic [7:0]  kb_layout,      // 0x40 US, 0x42 FR, 0x44 GE
     input  logic [3:0]  colors,         // green, blue, yellow, red
     input  logic [3:0]  buttons,        // ok, quit, help, abc
 
@@ -99,13 +103,27 @@ module vsmile (
 
     // MAME vsmile_state::uart_rx sends console bytes to both ports; port 2
     // has no device (RTS low)
+    logic       pad_tx_v, kb_tx_v, pad_rts, kb_rts, pad_rts_evt, kb_rts_evt;
+    logic [7:0] pad_tx_d, kb_tx_d;
     vsmile_pad pad1 (
-        .clk, .reset, .ce, .joy, .ud_level, .lr_level, .colors, .buttons,
+        .clk, .reset(reset || kbd), .ce, .joy, .ud_level, .lr_level, .colors, .buttons,
         .select(ctrl_select[0]),
         .rx_valid(uart_tx_valid), .rx_data(uart_tx_data),
-        .tx_valid(uart_rx_valid), .tx_data(uart_rx_data), .dbg(dbg_pad), .dbg_stale(dbg_pad_stale),
-        .rts(ctrl_rts[0]), .rts_evt(ctrl_rts_evt[0])
+        .tx_valid(pad_tx_v), .tx_data(pad_tx_d), .dbg(dbg_pad), .dbg_stale(dbg_pad_stale),
+        .rts(pad_rts), .rts_evt(pad_rts_evt)
     );
+    vsmile_kbd kbd1 (
+        .clk, .reset(reset || !kbd), .ce,
+        .keys(kb_keys), .joy, .buttons(buttons[2:0]), .layout(kb_layout),
+        .select(ctrl_select[0]),
+        .rx_valid(uart_tx_valid), .rx_data(uart_tx_data),
+        .tx_valid(kb_tx_v), .tx_data(kb_tx_d),
+        .rts(kb_rts), .rts_evt(kb_rts_evt)
+    );
+    assign uart_rx_valid   = kbd ? kb_tx_v     : pad_tx_v;
+    assign uart_rx_data    = kbd ? kb_tx_d     : pad_tx_d;
+    assign ctrl_rts[0]     = kbd ? kb_rts      : pad_rts;
+    assign ctrl_rts_evt[0] = kbd ? kb_rts_evt  : pad_rts_evt;
     assign ctrl_rts[1]     = 1'b0;
     assign ctrl_rts_evt[1] = 1'b0;
 

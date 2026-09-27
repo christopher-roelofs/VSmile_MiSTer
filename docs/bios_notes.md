@@ -50,6 +50,16 @@ address 0) ABC Land Aventure crashes at frame 81 and Cars - Rev It Up at
 frame 2807 in MAME, while the veesem dummy runs both (and four others) for
 the full 60 s.
 
+## Which games need the real system ROM
+
+MAME census, 224 carts x 120 s with the button script, dummy vs real ROM
+(census/nobios vs census/stamped): 217 run the whole time with the dummy.
+Only Little Einsteins (SP) and (English) stop early with the dummy alone
+(frame 1886, where the German/French Einsteins carts also stop even with
+the real ROM); the other 5 early stops are bad/partial dumps, Baby carts
+and dumps that also fail with the real ROM.  With the dummy, games lose the
+VTech intro and the system ROM's sound effects.
+
 ## For an open BIOS with our own intro
 
 Needed per slot: the structure the carts' intro/sound code expects (the

@@ -4,7 +4,7 @@
 all: obj_dir/Vvsmile_hw
 .PHONY: all
 
-RTL := ../../rtl/vsmile.sv ../../rtl/vsmile_pad.sv ../../rtl/vsmile_sdram.sv $(wildcard ../../rtl/spg2xx/*.sv) ../../rtl/unsp/unsp_core.sv vsmile_hw.sv sdram_model.sv altddio_out.sv
+RTL := ../../rtl/vsmile.sv ../../rtl/vsmile_pad.sv ../../rtl/vsmile_kbd.sv ../../rtl/vsmile_sdram.sv $(wildcard ../../rtl/spg2xx/*.sv) ../../rtl/unsp/unsp_core.sv vsmile_hw.sv sdram_model.sv altddio_out.sv
 
 sdram_sim.sv: ../../rtl/sdram.sv
 	sed -e 's/inout  reg \[15:0\] SDRAM_DQ,/inout  wire [15:0] SDRAM_DQ,/' \

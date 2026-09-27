@@ -218,6 +218,21 @@ int main(int argc, char** argv) {
     // STICK_LEVEL=n: joystick level 3..7 on both axes (0/unset: full, as MAME)
     top->ud_level = getenv("STICK_LEVEL") ? atoi(getenv("STICK_LEVEL")) : 0;
     top->lr_level = top->ud_level;
+    // KBD=1: Smart Keyboard (US) on port 1; KBD_EVENTS=file replays
+    // scripts/kbd_input.lua's log ("frame row col 1|0", row 5 = buttons)
+    top->kbd = getenv("KBD") ? 1 : 0;
+    top->kb_layout = 0x40;
+    for (int r = 0; r < 5; r++) top->kb_keys[r] = 0;
+    struct KbEv { uint32_t frame; int row, col, down; };
+    std::vector<KbEv> kb_events;
+    size_t kb_next = 0;
+    int kb_buttons = 0;
+    if (getenv("KBD_EVENTS")) {
+        FILE* f = fopen(getenv("KBD_EVENTS"), "r");
+        KbEv e;
+        while (f && fscanf(f, "%u %d %d %d", &e.frame, &e.row, &e.col, &e.down) == 4) kb_events.push_back(e);
+        if (f) fclose(f);
+    }
     top->cart_mask = cart_words - 1;
 #ifdef HW_TOP
     // bring up the SDRAM controller, then download the cart (and BIOS)
@@ -565,6 +580,15 @@ int main(int argc, char** argv) {
                     int m = 0;
                     for (auto& pr : presses) if (frame >= pr.first && frame < pr.first + 8) m |= pr.second;
                     top->buttons = m;
+                }
+                while (kb_next < kb_events.size() && kb_events[kb_next].frame <= frame) {
+                    const KbEv& e = kb_events[kb_next++];
+                    if (e.row < 5) {
+                        if (e.down) top->kb_keys[e.row] |= (1u << e.col); else top->kb_keys[e.row] &= ~(1u << e.col);
+                    } else {
+                        if (e.down) kb_buttons |= (1 << e.col); else kb_buttons &= ~(1 << e.col);
+                        top->buttons = kb_buttons;
+                    }
                 }
                 if (sweep_input) {
                     if (sweep_held >= 0 && frame % 90 == 8) sweep_held = -1;

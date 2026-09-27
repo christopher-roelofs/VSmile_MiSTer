@@ -52,6 +52,7 @@ localparam CONF_STR = {
     "O[6:3],Region,US,UK,French,German,Spanish,Italian,Dutch,Portuguese,Chinese;",
     "O[7],VTech Intro,On,Off;",
     "O[13:12],Console,Auto,V.Smile,V.Smile Motion;",
+    "O[15:14],Port 1,Joystick,Keyboard US,Keyboard FR,Keyboard DE;",
     "O[11],Audio,Stereo,Mono (Pocket);",
     "O[9:8],Debug,Off,SDRAM reads,Console;",
     "-;",
@@ -89,6 +90,7 @@ wire ce_27 = (ce_div == 2'd3);
 wire  [1:0] buttons;
 wire [127:0] status;
 wire [31:0] joystick_0;
+wire [10:0] ps2_key;          // {toggle, pressed, extended, set-2 scancode}
 wire [15:0] joystick_l_analog_0;      // {Y, X} signed, left stick
 wire        forced_scandoubler;
 wire [21:0] gamma_bus;
@@ -116,6 +118,7 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
     .info            (8'd1),
 
     .joystick_0      (joystick_0),
+    .ps2_key         (ps2_key),
     .joystick_l_analog_0(joystick_l_analog_0),
 
     .ioctl_download  (ioctl_download),
@@ -328,11 +331,68 @@ always @(posedge clk_sys) begin
     ud_level_s <= (joystick_0[2] | joystick_0[3]) ? 3'd0 : (a_u | a_d) ? stick_level(my) : 3'd0;
     lr_level_s <= (joystick_0[0] | joystick_0[1]) ? 3'd0 : (a_l | a_r) ? stick_level(mx) : 3'd0;
 end
+// Smart Keyboard: USB keyboard keys (PS/2 set 2) by physical position onto
+// MAME's US key matrix (rows ROW0-4, column = bit); the FR/DE keyboards
+// have the same positions, so an AZERTY/QWERTZ keyboard with the matching
+// layout types its own letters.  Enter / Esc / F1 are OK / Quit / Help.
+reg  [12:0] kb_keys [0:4];
+reg  [2:0]  kb_btn;           // help quit ok
+reg         ps2_tog;
+always @(posedge clk_sys) begin
+    ps2_tog <= ps2_key[10];
+    if (ps2_key[10] != ps2_tog) begin
+        reg [2:0] r;
+        reg [3:0] c;
+        reg       v;
+        v = 1'b1; r = 3'd7; c = 4'd0;
+        case ({ps2_key[8], ps2_key[7:0]})
+            9'h016: begin r = 0; c = 0;  end  9'h01E: begin r = 0; c = 1;  end  // 1 2
+            9'h026: begin r = 0; c = 2;  end  9'h025: begin r = 0; c = 3;  end  // 3 4
+            9'h02E: begin r = 0; c = 4;  end  9'h036: begin r = 0; c = 5;  end  // 5 6
+            9'h03D: begin r = 0; c = 6;  end  9'h03E: begin r = 0; c = 7;  end  // 7 8
+            9'h046: begin r = 0; c = 8;  end  9'h045: begin r = 0; c = 9;  end  // 9 0
+            9'h04E: begin r = 0; c = 10; end  9'h066: begin r = 0; c = 11; end  // - backspace
+            9'h00D: begin r = 1; c = 0;  end  9'h015: begin r = 1; c = 1;  end  // tab (typing time) q
+            9'h01D: begin r = 1; c = 2;  end  9'h024: begin r = 1; c = 3;  end  // w e
+            9'h02D: begin r = 1; c = 4;  end  9'h02C: begin r = 1; c = 5;  end  // r t
+            9'h035: begin r = 1; c = 6;  end  9'h03C: begin r = 1; c = 7;  end  // y u
+            9'h043: begin r = 1; c = 8;  end  9'h044: begin r = 1; c = 9;  end  // i o
+            9'h04D: begin r = 1; c = 10; end  9'h054: begin r = 1; c = 11; end  // p [
+            9'h05B: begin r = 1; c = 12; end                                    // ] (erase)
+            9'h058: begin r = 2; c = 0;  end  9'h01C: begin r = 2; c = 1;  end  // caps a
+            9'h01B: begin r = 2; c = 2;  end  9'h023: begin r = 2; c = 3;  end  // s d
+            9'h02B: begin r = 2; c = 4;  end  9'h034: begin r = 2; c = 5;  end  // f g
+            9'h033: begin r = 2; c = 6;  end  9'h03B: begin r = 2; c = 7;  end  // h j
+            9'h042: begin r = 2; c = 8;  end  9'h04B: begin r = 2; c = 9;  end  // k l
+            9'h04C: begin r = 2; c = 10; end                                    // ;
+            9'h012, 9'h059: begin r = 3; c = 0; end                             // shift
+            9'h01A: begin r = 3; c = 1;  end  9'h022: begin r = 3; c = 2;  end  // z x
+            9'h021: begin r = 3; c = 3;  end  9'h02A: begin r = 3; c = 4;  end  // c v
+            9'h032: begin r = 3; c = 5;  end  9'h031: begin r = 3; c = 6;  end  // b n
+            9'h03A: begin r = 3; c = 7;  end  9'h041: begin r = 3; c = 8;  end  // m ,
+            9'h049: begin r = 3; c = 9;  end  9'h175: begin r = 3; c = 10; end  // . up
+            9'h069: begin r = 4; c = 0;  end  9'h079: begin r = 4; c = 1;  end  // kp1 (player 1) kp+ (symbol)
+            9'h029: begin r = 4; c = 2;  end  9'h072: begin r = 4; c = 3;  end  // space kp2 (player 2)
+            9'h16B: begin r = 4; c = 4;  end  9'h172: begin r = 4; c = 5;  end  // left down
+            9'h174: begin r = 4; c = 6;  end                                    // right
+            9'h05A, 9'h15A: kb_btn[0] <= ps2_key[9];                            // enter: OK
+            9'h076: kb_btn[1] <= ps2_key[9];                                    // esc: Quit
+            9'h005: kb_btn[2] <= ps2_key[9];                                    // F1: Help
+            default: v = 1'b0;
+        endcase
+        if (v && r != 3'd7) kb_keys[r][c] <= ps2_key[9];
+    end
+    if (reset) begin
+        kb_keys <= '{default: 13'd0};
+        kb_btn  <= 3'd0;
+    end
+end
+
 reg [3:0] joy_s, colors_s, buttons_s;
 always @(posedge clk_sys) begin
     joy_s     <= {joystick_0[0] | a_r, joystick_0[1] | a_l, joystick_0[2] | a_d, joystick_0[3] | a_u};  // right left down up
     colors_s  <= joystick_0[7:4];                                               // red yellow blue green
-    buttons_s <= joystick_0[11:8];                                              // abc help quit ok
+    buttons_s <= joystick_0[11:8] | {1'b0, kb_btn};                             // abc help quit ok
 end
 
 wire [10:0] hcnt;
@@ -374,6 +434,9 @@ vsmile console
     .lr_level   (lr_level_s),
     .colors     (colors_s),
     .buttons    (buttons_s),
+    .kbd        (status[15:14] != 2'd0),
+    .kb_keys    (kb_keys),
+    .kb_layout  ((status[15:14] == 2'd2) ? 8'h42 : (status[15:14] == 2'd3) ? 8'h44 : 8'h40),
 
     .audio_l    (audio_l),
     .audio_r    (audio_r),
