@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Audio check against MAME: run a cart in a MAME built with the SPU_DUMP hook
-# (src/devices/machine/spg2xx_audio.cpp) with the v102 system ROM and the
+# (scripts/mame_spu_dump.patch on MAME 0.289+: SPU register writes with the
+# sample they first affect, bus bank changes, raw output) with the v102 system ROM and the
 # census button script, then replay MAME's SPU register writes into
 # rtl/spg2xx/spg2xx_spu.sv alone (sim/spu) and compare every output sample.
 #

@@ -11,10 +11,12 @@
 //   performed once the RTL has output k samples, before it starts sample k.
 // <prefix>.s: int16 L/R per sample at 70312.5 Hz.
 //
-// Sample memory, as the console's bus maps it after boot (chip-select mode
-// with the system ROM at 0x300000, which MAME uses with -bios): 0x300000-
-// 0x3FFFFF from BIOS=<file> if given, the rest of >= 0x4000 from the cart;
-// reads below 0x4000 (RAM) are counted and answered 0: the dump has no RAM.
+// Sample memory, as the console's bus maps it (rtl/vsmile.sv): the system ROM
+// (BIOS=<file>) when chip-select mode bit 1 is set and address bits 21:20
+// are 3, else the cart with cs2 above bit 21.  The dump's pseudo-writes
+// 0xc500 (chip-select mode) and 0xc520 (cs2) track the game's changes; at
+// reset the mode is 0 (cart everywhere, MAME machine_start).  Reads below
+// 0x4000 (RAM) are counted and answered 0: the dump has no RAM.
 #include "Vspg2xx_spu.h"
 #include "Vspg2xx_spu___024root.h"
 #include "verilated.h"
@@ -88,6 +90,7 @@ int main(int argc, char** argv) {
     uint64_t samples = 0, bad = 0, first_bad = ~0ull, ram_reads = 0, late = 0;
     uint64_t big = 0, first_big = ~0ull;   // off by more than 1 (1: MAME's float interpolation)
     int mem_wait = -1;
+    int cs_mode = 0, cs2 = 0;
     enum { W_IDLE, W_REQ, W_ACK } wst = W_IDLE;
     int16_t first_rtl[2] = {0, 0}, first_ref[2] = {0, 0};
     uint64_t max_diff = 0;
@@ -95,6 +98,12 @@ int main(int argc, char** argv) {
     while (samples < max_samples) {
         // register writes due before sample `samples`
         top->req = 0;
+        // bus mapping events are not SPU writes: apply them directly
+        while (wst == W_IDLE && wi < writes.size() && writes[wi].k <= samples && writes[wi].addr >= 0xc000) {
+            if (writes[wi].addr == 0xc500) cs_mode = writes[wi].data & 3;
+            if (writes[wi].addr == 0xc520) cs2 = writes[wi].data & 1;
+            wi++;
+        }
         if (wst == W_IDLE && wi < writes.size() && writes[wi].k <= samples && top->idle) {
             if (writes[wi].k < samples) late++;
             top->req = 1; top->we = 1;
@@ -108,8 +117,8 @@ int main(int argc, char** argv) {
         if (mem_wait == 0) {
             uint32_t a = top->mem_addr;
             uint16_t v = 0;
-            if (a >= 0x300000 && !bios.empty()) v = bios[(a - 0x300000) % bios.size()];
-            else if (a >= 0x4000) v = cart[a & cart_mask];
+            if ((cs_mode & 2) && ((a >> 20) & 3) == 3) v = bios.empty() ? 0xffff : bios[(a & 0xfffff) % bios.size()];
+            else if (a >= 0x4000) v = cart[((uint32_t)cs2 << 22 | a) & cart_mask];
             else ram_reads++;
             top->mem_rdata = v;
             top->mem_ack = 1;

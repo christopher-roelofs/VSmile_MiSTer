@@ -1,0 +1,18 @@
+Adventures of Little Red Riding Hood (FR).bin: 6328081 samples (90.00 s), 5 differ (first at 6574 = 0.093 s: RTL 15,3 MAME 15,2; max diff 1); 0 off by more than 1; 140902/140902 writes replayed, 0 late, 0 RAM sample reads
+Barney - The Land of Make Believe 92380(US).bin: 2109361 samples (30.00 s), 5 differ (first at 6501 = 0.092 s: RTL 15,2 MAME 15,1; max diff 1); 0 off by more than 1; 138746/138746 writes replayed, 0 late, 0 RAM sample reads
+Blue_s Clues - Collection Day (USA).bin: 2109361 samples (30.00 s), 0 differ; 0 off by more than 1; 138661/138661 writes replayed, 0 late, 0 RAM sample reads
+Bob the Builder - Bob's Busy Day (USA).bin: 2109361 samples (30.00 s), 10 differ (first at 3567 = 0.051 s: RTL 1,0 MAME 0,0; max diff 1); 0 off by more than 1; 138156/138156 writes replayed, 0 late, 0 RAM sample reads
+Cars - Rev It Up in Radiator Springs (USA).bin: 2109361 samples (30.00 s), 5 differ (first at 6541 = 0.093 s: RTL 15,3 MAME 15,2; max diff 1); 0 off by more than 1; 137130/137130 writes replayed, 0 late, 0 RAM sample reads
+Entdecke die Welt von Rotkaeppchen (Germany).bin: 6328081 samples (90.00 s), 5 differ (first at 6245 = 0.089 s: RTL 15,1 MAME 15,0; max diff 1); 0 off by more than 1; 142409/142409 writes replayed, 0 late, 0 RAM sample reads
+Finding Nemo - Nemo's Ocean Discoveries (USA).bin: 2109361 samples (30.00 s), 10 differ (first at 4147 = 0.059 s: RTL 3,0 MAME 2,0; max diff 1); 0 off by more than 1; 139586/139586 writes replayed, 0 late, 0 RAM sample reads
+Go Diego Go (US).bin: 2109361 samples (30.00 s), 0 differ; 0 off by more than 1; 137273/137273 writes replayed, 0 late, 0 RAM sample reads
+Handy Manny 090020(US).bin: 2109361 samples (30.00 s), 5 differ (first at 3744 = 0.053 s: RTL 2,0 MAME 1,0; max diff 1); 0 off by more than 1; 137391/137391 writes replayed, 0 late, 0 RAM sample reads
+Mickey Mouse Clubhouse 80-084180(US) (Motion) [ALT].bin: 2109361 samples (30.00 s), 5 differ (first at 3738 = 0.053 s: RTL 2,0 MAME 1,0; max diff 1); 0 off by more than 1; 138583/138583 writes replayed, 0 late, 0 RAM sample reads
+Partyland Park - A Carnival of Play and Learn Fun (USA).bin: 2109361 samples (30.00 s), 0 differ; 0 off by more than 1; 141053/141053 writes replayed, 0 late, 0 RAM sample reads
+Scooby-Doo - A Night Of Fright Is No Delight (US).bin: 2109361 samples (30.00 s), 0 differ; 0 off by more than 1; 136451/136451 writes replayed, 1 late, 0 RAM sample reads
+Spider-Man and Friends - Where is Hulk 089000(US).bin: 2109361 samples (30.00 s), 5 differ (first at 9352 = 0.133 s: RTL 14,15 MAME 15,15; max diff 1); 0 off by more than 1; 133739/133739 writes replayed, 0 late, 0 RAM sample reads
+The Lion King - Simba's Big Adventure (USA).bin: 2109361 samples (30.00 s), 0 differ; 0 off by more than 1; 141680/141680 writes replayed, 0 late, 0 RAM sample reads
+Thomas and Friends - Engines Working Together 92340(US).bin: 2109361 samples (30.00 s), 10 differ (first at 3566 = 0.051 s: RTL 1,0 MAME 0,0; max diff 1); 0 off by more than 1; 138729/138729 writes replayed, 0 late, 0 RAM sample reads
+V.Smile Jammin_ Gym Class 91320(US).bin: 2109361 samples (30.00 s), 0 differ; 0 off by more than 1; 143060/143060 writes replayed, 0 late, 0 RAM sample reads
+Wiggles, The - It_s Wiggle Time! (USA).bin: 2109361 samples (30.00 s), 0 differ; 0 off by more than 1; 138895/138895 writes replayed, 0 late, 0 RAM sample reads
+Wow Wow Wubbzy 090040(US).bin: 2109361 samples (30.00 s), 5 differ (first at 3736 = 0.053 s: RTL 2,0 MAME 1,0; max diff 1); 0 off by more than 1; 134667/134667 writes replayed, 0 late, 0 RAM sample reads

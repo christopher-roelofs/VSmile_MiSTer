@@ -1,0 +1,109 @@
+diff --git a/src/devices/machine/spg2xx_audio.cpp b/src/devices/machine/spg2xx_audio.cpp
+index 05fea0b4..0adbde87 100644
+--- a/src/devices/machine/spg2xx_audio.cpp
++++ b/src/devices/machine/spg2xx_audio.cpp
+@@ -20,6 +20,19 @@
+ #include "emu.h"
+ #include "spg2xx_audio.h"
+ 
++// SPU_DUMP=<prefix>: write <prefix>.w (every register write: "samples_so_far
++// address data", hex address) and <prefix>.s (the stream's int16 L/R samples
++// at the native rate), for replay against another SPU implementation.
++static FILE *s_spu_dump_w = nullptr, *s_spu_dump_s = nullptr, *s_spu_dump_c = nullptr;
++static uint64_t s_spu_samples = 0;
++static void spu_dump_write(uint32_t addr, uint16_t data)
++{
++	if (s_spu_dump_w) fprintf(s_spu_dump_w, "%llu %04x %04x\n", (unsigned long long)s_spu_samples, addr, data);
++}
++// for the machine driver: bus mapping changes the SPU's sample reads follow
++// (V.Smile: 0xc500 chip select mode, 0xc520 cart cs2)
++void spg2xx_spu_dump_event(uint32_t addr, uint16_t data) { spu_dump_write(addr, data); }
++
+ DEFINE_DEVICE_TYPE(SPG2XX_AUDIO, spg2xx_audio_device, "spg2xx_audio", "SPG2xx-series System-on-a-Chip Audio")
+ DEFINE_DEVICE_TYPE(SPG110_AUDIO, spg110_audio_device, "spg110_audio", "SPG110-series System-on-a-Chip Audio")
+ DEFINE_DEVICE_TYPE(SUNPLUS_GCM394_AUDIO, sunplus_gcm394_audio_device, "gcm394_audio", "SunPlus GCM394 System-on-a-Chip (Audio)")
+@@ -77,6 +90,13 @@ void spg2xx_audio_device::device_start()
+ 	m_audio_beat->adjust(attotime::never);
+ 
+ 	m_stream = stream_alloc(0, 2, 281250/4);
++	if (const char *p = getenv("SPU_DUMP"))
++	{
++		s_spu_dump_w = fopen((std::string(p) + ".w").c_str(), "w");
++		s_spu_dump_s = fopen((std::string(p) + ".s").c_str(), "wb");
++		if (getenv("SPU_DUMP_CH"))      // per sample: status mask, 16 x WAVE_DATA
++			s_spu_dump_c = fopen((std::string(p) + ".c").c_str(), "wb");
++	}
+ 
+ 	m_channel_debug = -1;
+ 
+@@ -442,6 +462,7 @@ uint16_t spg2xx_audio_device::audio_phase_r(offs_t offset)
+ 
+ void spg2xx_audio_device::audio_ctrl_w(offs_t offset, uint16_t data)
+ {
++	spu_dump_write(0x3400 + offset, data);
+ 	switch (offset)
+ 	{
+ 	case AUDIO_CHANNEL_ENABLE:
+@@ -727,6 +748,7 @@ void spg2xx_audio_device::audio_ctrl_w(offs_t offset, uint16_t data)
+ 
+ void spg2xx_audio_device::audio_phase_w(offs_t offset, uint16_t data)
+ {
++	spu_dump_write(0x3200 + offset, data);
+ 	const uint16_t channel = (offset & 0x01f0) >> 4;
+ 
+ 	switch (offset & AUDIO_CHAN_OFFSET_MASK)
+@@ -786,6 +808,7 @@ void spg2xx_audio_device::audio_phase_w(offs_t offset, uint16_t data)
+ 
+ void spg2xx_audio_device::audio_w(offs_t offset, uint16_t data)
+ {
++	spu_dump_write(0x3000 + offset, data);
+ 	const uint16_t channel = (offset & 0x01f0) >> 4;
+ 
+ 	switch (offset & AUDIO_CHAN_OFFSET_MASK)
+@@ -975,6 +998,19 @@ void spg2xx_audio_device::sound_stream_update(sound_stream &stream)
+ 
+ 		stream.put_int(0, i, int16_t(left_final), 32768);
+ 		stream.put_int(1, i, int16_t(right_final), 32768);
++		if (s_spu_dump_c)
++		{
++			uint16_t c[17];
++			c[0] = m_audio_ctrl_regs[AUDIO_CHANNEL_STATUS];
++			for (int ch = 0; ch < 16; ch++) c[1 + ch] = m_audio_regs[(ch << 4) | AUDIO_WAVE_DATA];
++			fwrite(c, sizeof c, 1, s_spu_dump_c);
++		}
++		if (s_spu_dump_s)
++		{
++			int16_t lr[2] = { int16_t(left_final), int16_t(right_final) };
++			fwrite(lr, sizeof lr, 1, s_spu_dump_s);
++		}
++		s_spu_samples++;
+ 	}
+ }
+ 
+diff --git a/src/mame/vtech/vsmile.cpp b/src/mame/vtech/vsmile.cpp
+index 499cf95c..6e8c94b3 100644
+--- a/src/mame/vtech/vsmile.cpp
++++ b/src/mame/vtech/vsmile.cpp
+@@ -31,8 +31,11 @@ void vsmile_base_state::machine_start()
+ 	m_bankdev->set_bank(bank);
+ }
+ 
++extern void spg2xx_spu_dump_event(uint32_t addr, uint16_t data);
++
+ void vsmile_base_state::chip_sel_w(uint8_t data)
+ {
++	spg2xx_spu_dump_event(0xc500, data);
+ 	const uint16_t cart_offset = m_cart && m_cart->exists() ? 4 : 0;
+ 	switch (data)
+ 	{
+@@ -133,7 +136,10 @@ void vsmile_state::portb_w(offs_t offset, uint16_t data, uint16_t mem_mask)
+ {
+ 	LOG("%s: portb_w: %04x & %04x (bit 1: %d & %d)\n", machine().describe_context(), data, mem_mask, BIT(data, 1), BIT(mem_mask, 1));
+ 	if (BIT(mem_mask, 1) && m_cart && m_cart->exists())
++	{
++		spg2xx_spu_dump_event(0xc520, BIT(~data, 1));
+ 		m_cart->set_cs2(BIT(~data, 1));
++	}
+ }
+ 
+ uint16_t vsmile_state::portc_r()
