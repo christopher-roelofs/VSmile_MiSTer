@@ -69,12 +69,17 @@ module vsmile_kbd (
     logic        sel_c;
     logic [3:0]  joy_c;
     logic [2:0]  buttons_c;
+    logic [12:0] keys_c [0:4];          // inputs resampled on ce
+    logic [7:0]  layout_c;
 
     always_ff @(posedge clk) begin
         if (reset) rx_seen <= 1'b0;
         else if (rx_valid) begin rx_seen <= 1'b1; rx_seen_data <= rx_data; end
         else if (ce) rx_seen <= 1'b0;
-        if (ce) begin sel_c <= select; joy_c <= joy; buttons_c <= buttons; end
+        if (ce) begin
+            sel_c <= select; joy_c <= joy; buttons_c <= buttons;
+            keys_c <= keys; layout_c <= layout;
+        end
     end
 
     // MAME's translate(): matrix position -> code
@@ -167,7 +172,7 @@ module vsmile_kbd (
                     if (v_state != S_RUN) begin
                         if (v_state >= S_RX1 && v_state <= S_RP2) v_state = v_state + 3'd1;
                         else if (v_state == S_RP3) begin
-                            push_b[push_n] = layout; push_n = push_n + 1; push_idle_reset = 1'b1;
+                            push_b[push_n] = layout_c; push_n = push_n + 1; push_idle_reset = 1'b1;
                             v_state  = S_RUN;
                             v_idle_t = 25'(IDLE_PERIOD);
                             v_active = 1'b1;
@@ -281,14 +286,14 @@ module vsmile_kbd (
                     if (scan_t == 14'd1) begin
                         logic [12:0] ch;
                         v_ks = kstate[scan_row];
-                        ch = v_ks ^ keys[scan_row];
+                        ch = v_ks ^ keys_c[scan_row];
                         if (ch != 0 && push_n < 3'd4) begin
                             logic [3:0] c;
                             c = 4'd0;
                             for (int i = 12; i >= 0; i--) if (ch[i]) c = 4'(i);
-                            v_ks[c] = keys[scan_row][c];
+                            v_ks[c] = keys_c[scan_row][c];
                             if (kcode(scan_row, c) != 8'h00) begin
-                                push_b[push_n] = !keys[scan_row][c] ? ((kcode(scan_row, c) == 8'ha9) ? 8'haa : (kcode(scan_row, c) | 8'hc0))
+                                push_b[push_n] = !keys_c[scan_row][c] ? ((kcode(scan_row, c) == 8'ha9) ? 8'haa : (kcode(scan_row, c) | 8'hc0))
                                                                     : kcode(scan_row, c);
                                 push_n = push_n + 1; push_idle_reset = 1'b1;
                             end

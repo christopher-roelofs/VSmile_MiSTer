@@ -336,8 +336,9 @@ module spg2xx_ppu (
                     tile_w <= tw; tile_h <= th;
                     nc_bpp <= ncb;
                     s_bpp  <= 3'(pg_attr[1:0]) + 3'd1;
-                    s_bpr  <= 6'((12'(ncb) * 12'(tw)) >> 4);
-                    s_wpt  <= 12'(((12'(ncb) * 12'(tw)) >> 4) * 12'(th));
+                    // tile sizes are powers of two: the multiplies are shifts
+                    s_bpr  <= 6'((12'(ncb) << ({1'b0, tws} + 3'd3)) >> 4);
+                    s_wpt  <= 12'(((12'(ncb) << ({1'b0, tws} + 3'd3)) >> 4) << ({1'b0, ths} + 3'd3));
                     by = 9'(8'(y + pg_yscroll[7:0]));
                     bitmap_y      <= by[7:0];
                     tile_scanline <= by[7:0] & (th[5:0] - 6'd1);

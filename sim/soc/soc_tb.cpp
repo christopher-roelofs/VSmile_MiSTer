@@ -65,10 +65,22 @@ struct TraceEntry {
     std::string text;
 };
 
+// Open a trace file, or its gzip-compressed copy (<path>.gz) through gzip -dc.
+static FILE* open_trace(const std::string& path) {
+    if (FILE* f = fopen(path.c_str(), "r")) return f;
+    std::string gz = path + ".gz";
+    if (FILE* t = fopen(gz.c_str(), "r")) {
+        fclose(t);
+        std::string cmd = "gzip -dc '" + gz + "'";
+        return popen(cmd.c_str(), "r");
+    }
+    return nullptr;
+}
+
 class TraceReader {
 public:
     explicit TraceReader(const std::string& path) {
-        f_ = fopen(path.c_str(), "r");
+        f_ = open_trace(path);
         if (!f_) { perror(path.c_str()); exit(1); }
     }
     bool next(TraceEntry& e) {
@@ -115,7 +127,7 @@ struct MemEvent { char kind; uint32_t addr; uint16_t data; };
 class MemLog {
 public:
     explicit MemLog(const std::string& path) {
-        f_ = fopen(path.c_str(), "r");
+        f_ = open_trace(path);
         if (!f_) { perror(path.c_str()); exit(1); }
     }
     bool peek(MemEvent& e) {
