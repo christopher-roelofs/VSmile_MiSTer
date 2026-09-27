@@ -135,7 +135,7 @@ module spg2xx_spu (
     typedef enum logic [4:0] {
         E_IDLE, E_CMD, E_CMD_LOAD, E_CMD_APPLY,
         E_TICK, E_CH, E_LOAD, E_ADV, E_FETCH, E_RD_HDR, E_RD_RAW, E_FETCH2, E_DEC1, E_DEC2, E_DEC3,
-        E_MIX1, E_MIX1B, E_MIX2, E_MIX3, E_MIX3B, E_ENV, E_ENV2, E_ENV_RD, E_WB, E_OUT, E_OUT2
+        E_MIX1, E_MIX1B, E_MIX2, E_MIX3, E_MIX3B, E_ENV, E_ENV2, E_ENV3, E_ENV_RD, E_WB, E_OUT, E_OUT2
     } estate_t;
     estate_t es;
 
@@ -656,6 +656,7 @@ module spg2xx_spu (
                     es <= E_WB;
             end
             E_ENV2: env_tick();
+            E_ENV3: env_tick2();
 
             E_ENV_RD: if (mem_ack) begin
                 mem_req <= 1'b0;
@@ -730,6 +731,11 @@ module spg2xx_spu (
     end
 
     // MAME audio_envelope_tick (reached with envclk_frame expired)
+    // envelope step (MAME envelope tick), in two clks: E_ENV2 computes the
+    // new level and handles a ramp to zero, E_ENV3 (on the registered
+    // result) reloads or reads the next envelope entry
+    logic [6:0] et_ne;
+    logic       et_at_tgt;
     task automatic env_tick;
         logic [15:0] cnt, ne, tgt, inc, curr;
         logic stopped;
@@ -761,32 +767,38 @@ module spg2xx_spu (
                 end
             end
             if (!stopped) begin
-                if (ne == tgt) begin
-                    if (w[C_ENV1][8]) begin
-                        logic [15:0] rc;
-                        rc = {9'd0, w[C_ENV1][15:9]} - 16'd1;
-                        if (rc == 0) begin
-                            env_rd_i     <= 0;
-                            env_rd_three <= 1'b1;
-                            mem_req      <= 1'b1;
-                            mem_addr     <= envaddr_r;
-                            es <= E_ENV_RD;
-                        end else begin
-                            w[C_ENV1][15:9]     <= rc[6:0];
-                            w[C_ENV_DATA][15:8] <= w[C_ENV1][7:0];
-                        end
-                    end else begin
-                        env_rd_i     <= 0;
-                        env_rd_three <= 1'b0;
-                        mem_req      <= 1'b1;
-                        mem_addr     <= envaddr_r;
-                        es <= E_ENV_RD;
-                    end
-                end else
-                    w[C_ENV_DATA][15:8] <= w[C_ENV1][7:0];
-                w[C_ENV_DATA][6:0] <= ne[6:0];
+                et_ne     <= ne[6:0];
+                et_at_tgt <= (ne == tgt);
+                es        <= E_ENV3;
             end
         end
+    endtask
+    task automatic env_tick2;
+        es <= E_WB;
+        if (et_at_tgt) begin
+            if (w[C_ENV1][8]) begin
+                logic [15:0] rc;
+                rc = {9'd0, w[C_ENV1][15:9]} - 16'd1;
+                if (rc == 0) begin
+                    env_rd_i     <= 0;
+                    env_rd_three <= 1'b1;
+                    mem_req      <= 1'b1;
+                    mem_addr     <= envaddr_r;
+                    es <= E_ENV_RD;
+                end else begin
+                    w[C_ENV1][15:9]     <= rc[6:0];
+                    w[C_ENV_DATA][15:8] <= w[C_ENV1][7:0];
+                end
+            end else begin
+                env_rd_i     <= 0;
+                env_rd_three <= 1'b0;
+                mem_req      <= 1'b1;
+                mem_addr     <= envaddr_r;
+                es <= E_ENV_RD;
+            end
+        end else
+            w[C_ENV_DATA][15:8] <= w[C_ENV1][7:0];
+        w[C_ENV_DATA][6:0] <= et_ne;
     endtask
 
     // MAME ima_adpcm_state::clock on the state latched in E_DEC1; `o` is
