@@ -90,6 +90,7 @@ wire [2:0] CMD_LOAD_MODE       = 3'b000;
 
 reg [13:0] refresh_count = startup_refresh_max - sdram_startup_cycles;
 reg  [2:0] command;
+reg        refresh_due = 0, refresh_due2 = 0;
 reg        chip;
 
 localparam STATE_STARTUP = 0;
@@ -127,6 +128,10 @@ always @(posedge clk) begin
 	ch3_ready <= 0;
 
 	refresh_count <= refresh_count+1'b1;
+	// refresh due flags, a clk behind the counter (timing: the compare no
+	// longer sits between the counter and the address pins)
+	refresh_due  <= (refresh_count > cycles_per_refresh);
+	refresh_due2 <= (refresh_count > (cycles_per_refresh << 1));
 
 	data_ready_delay1 <= data_ready_delay1>>1;
 	data_ready_delay2 <= data_ready_delay2>>1;
@@ -192,7 +197,7 @@ always @(posedge clk) begin
 		STATE_IDLE_1: begin
 			state      <= STATE_IDLE;
 			// mask possible refresh to reduce colliding.
-			if (refresh_count > cycles_per_refresh) begin
+			if (refresh_due) begin
 				//------------------------------------------------------------------------
 				//-- Start the refresh cycle. 
 				//-- This tasks tRFC (66ns), so 7 idle cycles are needed @ 120MHz
@@ -211,7 +216,7 @@ always @(posedge clk) begin
 		end
 
 		STATE_IDLE: begin
-			if (refresh_count > (cycles_per_refresh << 1)) begin
+			if (refresh_due2) begin
 				// Priority is to issue a refresh if one is outstanding
 				state <= STATE_IDLE_1;
 			end
