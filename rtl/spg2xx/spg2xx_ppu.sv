@@ -25,6 +25,7 @@ module spg2xx_ppu (
     input  logic        clk,
     input  logic        reset,
     input  logic        clk_vid,        // scan-out clock (line buffer read port)
+    input  logic        spg28x,         // MAME spg28x_device: sprite limit 64
 
     input  logic [15:0] regs [0:255],   // video registers (spg2xx_vctl)
     input  logic        line_start,     // a new scanline begins
@@ -418,7 +419,7 @@ module spg2xx_ppu (
 
             // ---- sprites ----
             R_SPR: begin
-                if (!spr_ctrl[0] || n == 9'd256) begin
+                if (!spr_ctrl[0] || n == (spg28x ? 9'd64 : 9'd256)) begin
                     if (prio == 2'd3) rs <= R_DONE;
                     else begin prio <= prio + 2'd1; rs <= R_PRIO; end
                 end else if (cand_v[n[7:0]] && cand_p[n[7:0]] == prio) begin

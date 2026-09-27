@@ -21,6 +21,7 @@
 module spg2xx (
     input  logic        clk,
     input  logic        reset,
+    input  logic        spg28x,         // SPG28x (V.Smile Baby): 64 sprites, 28x UART baud
     input  logic        ce,
     input  logic        clk_vid,        // scan-out clock for the line buffer
     input  logic        pal,
@@ -128,7 +129,7 @@ module spg2xx (
     logic        fiq_vector_set;
 
     spg2xx_io io (
-        .clk, .reset, .ce,
+        .clk, .reset, .ce, .spg28x,
         .addr(reg_off), .rd(io_rd), .wr(io_wr), .wdata(reg_wdata), .rdata(io_rdata),
         .porta_in, .portb_in, .portc_in, .porta_out, .portb_out, .portc_out,
         .porta_oe, .portb_oe, .portc_oe, .port_wr,
@@ -165,7 +166,7 @@ module spg2xx (
     logic [15:0] ppu_vram_q;
 
     spg2xx_ppu ppu (
-        .clk, .reset, .clk_vid,
+        .clk, .reset, .clk_vid, .spg28x,
         .regs(vregs), .line_start, .line_vpos(vpos), .last_line,
         .mem_req(ppu_mem_req), .mem_group(ppu_mem_group), .mem_more(ppu_mem_more), .mem_addr(ppu_mem_addr), .mem_ack(ppu_mem_ack),
         .mem_rdata(ppu_mem_rdata), .mem_rdata64(ppu_mem_rdata64),
@@ -217,7 +218,7 @@ module spg2xx (
     logic [15:0] spu_mem_rdata;
 
     spg2xx_spu spu (
-        .clk, .reset, .ce,
+        .clk, .reset, .ce, .spg28x,
         .req(spu_req), .we(q_wr), .addr(q_addr[10:0]), .wdata(q_wdata),
         .ack(spu_ack), .rdata(spu_rdata), .idle(spu_idle),
         .mem_req(spu_mem_req), .mem_addr(spu_mem_addr), .mem_ack(spu_mem_ack), .mem_rdata(spu_mem_rdata),

@@ -51,15 +51,15 @@ localparam CONF_STR = {
     "O[2],TV Mode,NTSC,PAL;",
     "O[6:3],Region,US,UK,French,German,Spanish,Italian,Dutch,Portuguese,Chinese;",
     "O[7],VTech Intro,On,Off;",
-    "O[13:12],Console,Auto,V.Smile,V.Smile Motion;",
+    "O[13:12],Console,Auto,V.Smile,V.Smile Motion,V.Smile Baby;",
+    "O[17:16],Baby Switch,Play Time,Watch & Learn,Learn & Explore;",
     "O[15:14],Port 1,Joystick,Keyboard US,Keyboard FR,Keyboard DE;",
     "O[11],Audio,Stereo,Mono (Pocket);",
     "O[9:8],Debug,Off,SDRAM reads,Console;",
     "-;",
     "R0,Reset;",
-    "J1,Green,Blue,Yellow,Red,OK,Quit,Help,ABC;",
+    "J1,Green,Blue,Yellow,Red,OK/Orange,Quit/Exit,Help/Cloud,ABC/Ball;",
     "jn,B,X,Y,L,A,Select,R,Start;",
-    "I,V.Smile Baby cartridge|not supported yet;",
     "V,v0.1.",`BUILD_DATE
 };
 
@@ -102,8 +102,6 @@ wire  [7:0] ioctl_dout;
 wire  [7:0] ioctl_index;
 reg         ioctl_wait;
 
-reg         baby_info_req = 0;      // (V.Smile Baby cart message, below)
-
 hps_io #(.CONF_STR(CONF_STR)) hps_io
 (
     .clk_sys         (clk_sys),
@@ -114,8 +112,6 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
     .buttons         (buttons),
     .status          (status),
     .forced_scandoubler(forced_scandoubler),
-    .info_req        (baby_info_req),
-    .info            (8'd1),
 
     .joystick_0      (joystick_0),
     .ps2_key         (ps2_key),
@@ -149,13 +145,17 @@ wire        dl_is_bios   = (ioctl_index == 0) || (ioctl_index == 2) || dl_is_mot
 // per 16-bit word; the download is scanned for it (like the Game Boy core's
 // CGB-flag detection, the download holds the console in reset).
 reg         cart_motion = 0;
-// V.Smile Baby carts (SPG28x console, not emulated): their reset vector
-// (word 0xFFF7) is 0x4EE6-0x5B22 in every known Baby cart and 0xA425-0xF993
-// in every standard/Motion cart, so a vector below 0x8000 marks one.  The
-// console is held in reset and the MiSTer shows a message.
+// V.Smile Baby carts (SPG28x console): their reset vector (word 0xFFF7) is
+// 0x4EE6-0x5B22 in every known Baby cart and 0xA425-0xF993 in every
+// standard/Motion cart, so a vector below 0x8000 marks one; Console: Auto
+// then runs the Baby.  Baby carts do not use the system ROM (they boot and
+// run the same with an all-zero one in MAME), so the Baby needs no BIOS file.
 reg         cart_baby = 0;
 reg  [7:0]  vec_lo;
-wire        motion = (status[13:12] == 2'd0) ? (cart_motion && has_bios_motion) : (status[13:12] == 2'd2);
+// (registered: a static mode that fans out across the SoC)
+reg         baby = 0;
+always @(posedge clk_sys) baby <= (status[13:12] == 2'd0) ? cart_baby : (status[13:12] == 2'd3);
+wire        motion = (status[13:12] == 2'd0) ? (cart_motion && has_bios_motion && !cart_baby) : (status[13:12] == 2'd2);
 reg  [7:0]  dl_lo;
 reg         dl_req;
 reg  [23:0] dl_waddr;
@@ -177,8 +177,6 @@ reg [4:0] mpos;
 reg       dl_q;
 always @(posedge clk_sys) begin
     dl_q <= ioctl_download;
-    baby_info_req <= 0;
-    if (!ioctl_download && dl_q && cart_baby) baby_info_req <= 1;   // download done
     if (ioctl_download && ioctl_wr && !dl_is_bios) begin
         if (ioctl_addr == 25'h1FFEE) vec_lo <= ioctl_dout;
         if (ioctl_addr == 25'h1FFEF) cart_baby <= ({ioctl_dout, vec_lo} >= 16'h4000) && ({ioctl_dout, vec_lo} < 16'h8000);
@@ -295,7 +293,7 @@ sdram sdram
 
 // registered: this net fans out to every flop in the design
 reg [1:0] rst_sync = 2'b11;
-always @(posedge clk_sys) rst_sync <= {rst_sync[0], RESET | status[0] | buttons[1] | ~pll_locked | ioctl_download | cart_baby};
+always @(posedge clk_sys) rst_sync <= {rst_sync[0], RESET | status[0] | buttons[1] | ~pll_locked | ioctl_download};
 wire reset = rst_sync[1];
 
 // region code on port C (MAME vsmile REGION dip)
@@ -389,10 +387,14 @@ always @(posedge clk_sys) begin
 end
 
 reg [3:0] joy_s, colors_s, buttons_s;
+reg [7:0] baby_s;
 always @(posedge clk_sys) begin
     joy_s     <= {joystick_0[0] | a_r, joystick_0[1] | a_l, joystick_0[2] | a_d, joystick_0[3] | a_u};  // right left down up
     colors_s  <= joystick_0[7:4];                                               // red yellow blue green
     buttons_s <= joystick_0[11:8] | {1'b0, kb_btn};                             // abc help quit ok
+    // V.Smile Baby: exit ball cloud red green orange blue yellow
+    baby_s    <= {joystick_0[9], joystick_0[11], joystick_0[10], joystick_0[7], joystick_0[4],
+                  joystick_0[8], joystick_0[5], joystick_0[6]};
 end
 
 wire [10:0] hcnt;
@@ -419,8 +421,11 @@ vsmile console
     .pal        (status[2]),
     .mame_timing(1'b0),
     .region     ({~status[7], lang}),
-    .has_bios   (motion ? has_bios_motion : has_bios_std),
+    .has_bios   (baby ? 1'b0 : motion ? has_bios_motion : has_bios_std),
     .motion     (motion),
+    .baby       (baby),
+    .baby_buttons(baby_s),
+    .baby_mode  (status[17:16]),
     .dummy_bios (1'b1),
 
     .mem_req    (mem_req),
@@ -518,6 +523,9 @@ reg  [31:0] st_insn, st_reads, st_iow;
 reg  [15:0] st_irq, st_ill, st_frames, st_ovr;
 reg  [63:0] st_pcs;
 reg  [15:0] st_vr [0:31];
+reg         st_vr_wr;
+reg   [4:0] st_vr_a;
+reg  [15:0] st_vr_d;
 reg  [8:0]  st_vpos_q;
 always @(posedge clk_sys) begin
     st_vpos_q <= vpos;
@@ -536,8 +544,11 @@ always @(posedge clk_sys) begin
             st_pcs    <= {st_pcs[47:0], dbg_pc[15:0]};
         end
     end
-    if (dbg_io_wr && dbg_io_addr >= 16'h2810 && dbg_io_addr < 16'h2830)
-        st_vr[5'(dbg_io_addr - 16'h2810)] <= dbg_io_wdata;
+    // (the bus write registered first: this is only a debug view)
+    st_vr_wr <= dbg_io_wr && dbg_io_addr >= 16'h2810 && dbg_io_addr < 16'h2830;
+    st_vr_a  <= 5'(dbg_io_addr - 16'h2810);
+    st_vr_d  <= dbg_io_wdata;
+    if (st_vr_wr) st_vr[st_vr_a] <= st_vr_d;
 end
 
 reg [15:0] st_ptx, st_prx, st_psel;

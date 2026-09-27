@@ -40,6 +40,11 @@ echo "$cart" > "$out/cart"
 if [ ! -f "$rompath/vsmile/vsmile_v103.bin" ]; then
     head -c 2097152 /dev/zero | tr '\0' '\377' > "$rompath/vsmile/vsmile_v103.bin"
 fi
+# V.Smile Baby (MAME_SYSTEM=vsmileb, or vsmilebsw with the real Swedish
+# system ROM): carts do not use the system ROM, a 0xFF placeholder does
+mkdir -p "$rompath/vsmileb"
+[ -f "$rompath/vsmileb/vsmilebabybios.bin" ] || head -c 8388608 /dev/zero | tr '\0' '\377' > "$rompath/vsmileb/vsmilebabybios.bin"
+[ -f "$rompath/vsmileb/vsmilebabybios_sweden.bin" ] || cp "$here/roms/bios/vsmilebabybios_sweden.bin" "$rompath/vsmileb/" 2>/dev/null || true
 
 cat > "$out/trace.lua" <<EOF
 local cpu   = manager.machine.devices[":maincpu"]

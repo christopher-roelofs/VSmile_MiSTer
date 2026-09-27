@@ -11,6 +11,7 @@
 module spg2xx_io (
     input  logic        clk,
     input  logic        reset,
+    input  logic        spg28x,         // SPG28x UART baud (MAME spg28x_io_device)
     input  logic        ce,
 
     // register bus (offset = address - 0x3D00); rd/wr are one-clk strobes
@@ -173,12 +174,22 @@ module spg2xx_io (
     logic [7:0]  rx_fifo [0:7];
     logic [2:0]  rx_start, rx_end;
     logic [3:0]  rx_count;
-    logic        rx_available, rx_irq, tx_irq;
+    logic        rx_available, rx_irq /* verilator public_flat_rd */, tx_irq;
     logic [23:0] tx_cnt, rx_cnt;
     logic        tx_busy, rx_busy;
     // frame = (10|11 bits) * 16 * (0x10000 - baud) system clocks
-    wire  [16:0] uart_div   = 17'h10000 - {1'b0, uart_baud2[7:0], uart_baud1[7:0]};
-    wire  [23:0] uart_frame = 24'(uart_ctrl[5] ? 11 : 10) * {3'd0, uart_div, 4'd0};
+    // SPG28x: a BAUD1 write sets 27 MHz / (0x10000 - BAUD1) baud (no x16);
+    // a later BAUD2 write goes back to the common formula
+    logic        baud28;
+    wire  [15:0] baud_lo    = spg28x ? uart_baud1 : {8'd0, uart_baud1[7:0]};
+    wire  [16:0] uart_div   = 17'h10000 - {1'b0, 16'({uart_baud2[7:0], 8'd0} | baud_lo)};
+    wire  [16:0] uart_div28 = 17'h10000 - {1'b0, uart_baud1};
+    // registered (the multiply is off the counters' load path); a baud or
+    // control write takes effect one clk later
+    logic [23:0] uart_frame;
+    always_ff @(posedge clk)
+        uart_frame <= (spg28x && baud28) ? 24'(uart_ctrl[5] ? 11 : 10) * {7'd0, uart_div28}
+                                         : 24'(uart_ctrl[5] ? 11 : 10) * {3'd0, uart_div, 4'd0};
 
     // ------------------------------------------------------------------
     // GPIO (MAME do_gpio)
@@ -302,7 +313,7 @@ module spg2xx_io (
             sys_ctrl <= 0; ext_mem <= 16'h0028; tmb_setup <= 0; tmb_armed <= 0;
             adc_ctrl <= 0; adc_pad <= 0; adc_data <= 0; adc_busy <= 0; adc_auto <= 0;
             prng1 <= 16'h1418; prng2 <= 16'h1658;
-            uart_ctrl <= 0; uart_stat <= 0; uart_baud1 <= 0; uart_baud2 <= 0;
+            uart_ctrl <= 0; uart_stat <= 0; uart_baud1 <= 0; uart_baud2 <= 0; baud28 <= 0;
             uart_txbuf <= 0; uart_rxbuf <= 0; uart_rxfifo <= 0;
             rx_start <= 0; rx_end <= 0; rx_count <= 0;
             rx_available <= 0; rx_irq <= 0; tx_irq <= 0; tx_busy <= 0; rx_busy <= 0;
@@ -531,8 +542,8 @@ module spg2xx_io (
                         tx_irq <= ntx;
                         if (!nrx && !ntx) st_clr[8] = 1'b1;
                     end
-                    R_UART_BAUD1: uart_baud1 <= wdata;
-                    R_UART_BAUD2: uart_baud2 <= wdata;
+                    R_UART_BAUD1: begin uart_baud1 <= wdata; baud28 <= 1'b1; end
+                    R_UART_BAUD2: begin uart_baud2 <= wdata; baud28 <= 1'b0; end
                     R_UART_TXBUF: begin
                         uart_txbuf <= wdata;
                         if (uart_ctrl[7]) begin

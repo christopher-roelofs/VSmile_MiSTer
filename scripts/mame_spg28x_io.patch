@@ -1,0 +1,28 @@
+--- /tmp/claude-1000/-home-christopher-Documents-Development-mister-vtech/49480b50-0688-4046-8c57-f9ac010d5681/scratchpad/spg2xx.h.orig	2026-09-27 16:26:52.280164163 -0400
++++ src/devices/machine/spg2xx.h	2026-09-27 16:26:52.304825899 -0400
+@@ -190,6 +190,8 @@
+ 
+ 	spg28x_device(const machine_config &mconfig, const char *tag, device_t *owner, uint32_t clock);
+ 
++protected:
++	virtual void device_add_mconfig(machine_config &config) override;
+ };
+ 
+ DECLARE_DEVICE_TYPE(SPG2XX_128, spg2xx_128_device)
+--- /tmp/claude-1000/-home-christopher-Documents-Development-mister-vtech/49480b50-0688-4046-8c57-f9ac010d5681/scratchpad/spg2xx.cpp.orig	2026-09-27 16:26:52.281546093 -0400
++++ src/devices/machine/spg2xx.cpp	2026-09-27 16:26:52.305066645 -0400
+@@ -186,6 +186,14 @@
+ 	m_spg_video->gunx_in().set(FUNC(spg2xx_device::gunx_in_r));
+ }
+ 
++// SPG28x: its own I/O block (UART baud = 27 MHz / (0x10000 - BAUD1))
++void spg28x_device::device_add_mconfig(machine_config &config)
++{
++	spg24x_device::device_add_mconfig(config);
++	SPG28X_IO(config.replace(), m_spg_io, DERIVED_CLOCK(1, 1), DEVICE_SELF, m_screen);
++	configure_spg_io(m_spg_io);
++}
++
+ void spg24x_device::device_add_mconfig(machine_config &config)
+ {
+ 	SPG2XX_AUDIO(config, m_spg_audio, DERIVED_CLOCK(1, 1));

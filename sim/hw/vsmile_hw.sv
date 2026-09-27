@@ -12,6 +12,14 @@ module vsmile_hw (
     input  logic [4:0]  region,
     input  logic        has_bios,
     input  logic        motion,
+    input  logic        baby,
+    input  logic [7:0]  baby_buttons,
+    input  logic [1:0]  baby_mode,
+    input  logic        dummy_bios,
+    input  logic [2:0]  ud_level, lr_level,
+    input  logic        kbd,
+    input  logic [12:0] kb_keys [0:4],
+    input  logic [7:0]  kb_layout,
     input  logic [22:0] cart_mask,
 
     input  logic        sdram_init,
@@ -63,9 +71,9 @@ module vsmile_hw (
     logic [63:0] mem_rdata;
 
     vsmile console (
-        .clk, .reset, .ce, .clk_vid, .pal, .mame_timing, .region, .has_bios, .motion, .dummy_bios(1'b0),
+        .clk, .reset, .ce, .clk_vid, .pal, .mame_timing, .region, .has_bios, .motion, .baby, .baby_buttons, .baby_mode, .dummy_bios,
         .mem_req, .mem_addr, .mem_ack, .mem_rdata, .cart_mask,
-        .joy, .ud_level(3'd0), .lr_level(3'd0), .kbd(1'b0), .kb_keys('{default: 13'd0}), .kb_layout(8'h40),
+        .joy, .ud_level, .lr_level, .kbd, .kb_keys, .kb_layout,
         .colors, .buttons,
         .audio_l, .audio_r, .audio_strobe,
         .vpos, .hpos, .hcnt, .vblank, .out_x, .out_rgb, .out_rgb888, .line_done, .done_y, .ppu_overrun,

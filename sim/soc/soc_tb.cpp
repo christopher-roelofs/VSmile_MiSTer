@@ -227,6 +227,13 @@ int main(int argc, char** argv) {
     // DUMMY_BIOS=1: without BIOS=, the system ROM area reads as veesem's dummy
     // (as on the MiSTer) instead of 0xFFFF (as in the MAME traces)
     top->dummy_bios = getenv("DUMMY_BIOS") ? 1 : 0;
+    // BABY=1: V.Smile Baby (SPG28x, built-in buttons; system ROM in BIOS=);
+    // KBD_EVENTS rows 6 (buttons, col = MAME BUTTONS bit) and 7 (col = switch
+    // position) drive it; PAL=1 for the PAL machines (vsmilebsw)
+    top->baby = getenv("BABY") ? 1 : 0;
+    top->baby_buttons = 0;
+    top->baby_mode = 0;
+    if (getenv("PAL")) top->pal = 1;
     // STICK_LEVEL=n: joystick level 3..7 on both axes (0/unset: full, as MAME)
     top->ud_level = getenv("STICK_LEVEL") ? atoi(getenv("STICK_LEVEL")) : 0;
     top->lr_level = top->ud_level;
@@ -235,16 +242,37 @@ int main(int argc, char** argv) {
     top->kbd = getenv("KBD") ? 1 : 0;
     top->kb_layout = 0x40;
     for (int r = 0; r < 5; r++) top->kb_keys[r] = 0;
-    struct KbEv { uint32_t frame; int row, col, down; };
-    std::vector<KbEv> kb_events;
-    size_t kb_next = 0;
+    // an optional fifth column is MAME's emulated time of the event (s):
+    // those events are applied at that clock instead of at the frame
+    struct KbEv { uint32_t frame; int row, col, down; uint64_t clk; };
+    std::vector<KbEv> kb_events, kb_timed;
+    size_t kb_next = 0, kb_timed_next = 0;
     int kb_buttons = 0;
     if (getenv("KBD_EVENTS")) {
         FILE* f = fopen(getenv("KBD_EVENTS"), "r");
-        KbEv e;
-        while (f && fscanf(f, "%u %d %d %d", &e.frame, &e.row, &e.col, &e.down) == 4) kb_events.push_back(e);
+        char line[256];
+        while (f && fgets(line, sizeof line, f)) {
+            KbEv e; double t;
+            int k = sscanf(line, "%u %d %d %d %lf", &e.frame, &e.row, &e.col, &e.down, &t);
+            if (k < 4) continue;
+            if (k == 5) { e.clk = (uint64_t)(t * 108e6); kb_timed.push_back(e); }
+            else kb_events.push_back(e);
+        }
         if (f) fclose(f);
     }
+    int* kb_buttons_p = &kb_buttons;
+    auto apply_ev = [&](const KbEv& e) {
+        if (e.row == 6) {
+            if (e.down) top->baby_buttons |= (1u << e.col); else top->baby_buttons &= ~(1u << e.col);
+        } else if (e.row == 7) {
+            if (e.down) top->baby_mode = e.col;
+        } else if (e.row < 5) {
+            if (e.down) top->kb_keys[e.row] |= (1u << e.col); else top->kb_keys[e.row] &= ~(1u << e.col);
+        } else {
+            if (e.down) *kb_buttons_p |= (1 << e.col); else *kb_buttons_p &= ~(1 << e.col);
+            top->buttons = *kb_buttons_p;
+        }
+    };
     top->cart_mask = cart_words - 1;
 #ifdef HW_TOP
     // bring up the SDRAM controller, then download the cart (and BIOS)
@@ -262,7 +290,7 @@ int main(int argc, char** argv) {
         for (int i = 0; i < 3; i++) { top->clk = 0; top->eval(); top->clk = 1; top->eval(); }
     };
     for (uint32_t i = 0; i < cart.size(); i++) dl_word(i, cart[i]);
-    for (uint32_t i = 0; i < bios.size(); i++) dl_word((getenv("MOTION") ? 0x900000 : 0x800000) + i, bios[i]);
+    for (uint32_t i = 0; i < bios.size() && i < 0x100000; i++) dl_word((getenv("BABY") ? 0xA00000 : getenv("MOTION") ? 0x900000 : 0x800000) + i, bios[i]);
     while (top->wr_busy) { top->clk = 0; top->eval(); top->clk = 1; top->eval(); }
     printf("downloaded %u cart words into the SDRAM model\n", (unsigned)cart.size());
 #endif
@@ -412,7 +440,7 @@ int main(int argc, char** argv) {
                 uint32_t a = base + i;
                 uint16_t v = 0xffff;
                 if (a < 0x800000) v = cart[a & (cart_words - 1)];
-                else if (!bios.empty()) v = bios[(a - 0x800000) % bios.size()];
+                else if (!bios.empty()) v = bios[(a & 0xfffff) % bios.size()];
                 g = (g << 16) | v;
             }
             top->mem_rdata = g;
@@ -464,6 +492,8 @@ int main(int argc, char** argv) {
         top->clk = 1;
         top->eval();
         clk_n++;
+        while (kb_timed_next < kb_timed.size() && clk_n >= kb_timed[kb_timed_next].clk)
+            apply_ev(kb_timed[kb_timed_next++]);
 
         if (top->audio_strobe) wav.put((int16_t)top->audio_l, (int16_t)top->audio_r);
 #ifdef HW_TOP
@@ -476,7 +506,7 @@ int main(int argc, char** argv) {
                 uint64_t exp = 0;
                 for (int i = 3; i >= 0; i--) {
                     uint32_t a = base + i;
-                    uint16_t v = (a < 0x800000) ? cart[a & (cart_words - 1)] : (bios.empty() ? 0xffff : bios[(a - 0x800000) % bios.size()]);
+                    uint16_t v = (a < 0x800000) ? cart[a & (cart_words - 1)] : (bios.empty() ? 0xffff : bios[(a & 0xfffff) % bios.size()]);
                     exp = (exp << 16) | v;
                 }
                 mem_seen++;
@@ -495,6 +525,9 @@ int main(int argc, char** argv) {
             if (pad_dbg) {
                 auto& r = *top->rootp;
                 if (r.H(uart_rx_valid)) printf("  [%llu] pad->console %02X\n", (unsigned long long)n, r.H(uart_rx_data));
+                static int last_rxirq = 0;
+                int rxirq = r.H(soc__DOT__io__DOT__rx_irq);
+                if (rxirq != last_rxirq) { printf("  [%llu] rx_irq %d\n", (unsigned long long)n, rxirq); last_rxirq = rxirq; }
                 if (r.H(uart_tx_valid)) printf("  [%llu] console->pad %02X sel=%d\n", (unsigned long long)n, r.H(uart_tx_data), r.H(ctrl_select) & 1);
             }
         }
@@ -593,15 +626,8 @@ int main(int argc, char** argv) {
                     for (auto& pr : presses) if (frame >= pr.first && frame < pr.first + 8) m |= pr.second;
                     top->buttons = m;
                 }
-                while (kb_next < kb_events.size() && kb_events[kb_next].frame <= frame) {
-                    const KbEv& e = kb_events[kb_next++];
-                    if (e.row < 5) {
-                        if (e.down) top->kb_keys[e.row] |= (1u << e.col); else top->kb_keys[e.row] &= ~(1u << e.col);
-                    } else {
-                        if (e.down) kb_buttons |= (1 << e.col); else kb_buttons &= ~(1 << e.col);
-                        top->buttons = kb_buttons;
-                    }
-                }
+                while (kb_next < kb_events.size() && kb_events[kb_next].frame <= frame)
+                    apply_ev(kb_events[kb_next++]);
                 if (sweep_input) {
                     if (sweep_held >= 0 && frame % 90 == 8) sweep_held = -1;
                     if (frame > 300 && frame % 90 == 0) sweep_held = (frame / 90) % 16;

@@ -26,6 +26,7 @@ module spg2xx_spu (
     input  logic        clk,
     input  logic        reset,
     input  logic        ce,
+    input  logic        spg28x,         // V.Smile Baby: fast ramp-down skips manual-envelope channels
 
     // register access (offset = address - 0x3000), held until ack
     input  logic        req,
@@ -632,7 +633,16 @@ module spg2xx_spu (
             end
 
             E_ENV: begin
-                if (x[X_RAMPDOWN][ch]) begin
+                // Fast ramp-down.  On the V.Smile Baby (SPG28x) it leaves
+                // channels whose envelope is under manual control alone:
+                // Baby carts start a sound effect by ramping down 0x4FDx,
+                // which includes the narration channels (ADPCM one-shots
+                // with a manual envelope); MAME ramps those too and cuts
+                // every voice clip short (the reason MAME marks the Baby not
+                // working; its notes say the voices play fine without
+                // ramp-down).  The standard V.Smile keeps MAME's behaviour,
+                // which its carts use to cut manual-envelope music notes.
+                if (x[X_RAMPDOWN][ch] && !(spg28x && x[X_ENV_MODE][ch])) begin
                     logic [16:0] f;
                     f = (ramp_r > 0) ? ramp_r - 17'd1 : 17'd0;
                     ramp_frame[ch] <= f;
