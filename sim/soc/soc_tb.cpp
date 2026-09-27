@@ -456,12 +456,12 @@ int main(int argc, char** argv) {
             static const bool ppu_trace = getenv("PPU_TRACE") != nullptr;
             if (ppu_trace && rs != prev_rs && (int)frame == dbg_frame && rp.H(soc__DOT__ppu__DOT__y) == dbg_line)
                 printf("  RTL rs=%d n=%d cnt=%d\n", rs, rp.H(soc__DOT__ppu__DOT__n), rp.H(soc__DOT__ppu__DOT__cnt));
-            if (rs == 11 && prev_rs != 11 && (int)frame == dbg_frame && rp.H(soc__DOT__ppu__DOT__y) == dbg_line)
-                printf("  RTL strip row=%06X drawx=%3d w=%2d bpr=%2d pal=%02X fx=%d bl=%d\n",
+            if (rs == 16 && prev_rs != 16 && (int)frame == dbg_frame && rp.H(soc__DOT__ppu__DOT__y) == dbg_line)   // R_FETCH
+                printf("  RTL strip row=%06X drawx=%3d w=%2d bpr=%2d pal=%02X fx=%d bl=%d (tile %04X)\n",
                        rp.H(soc__DOT__ppu__DOT__row_addr), rp.H(soc__DOT__ppu__DOT__drawx),
                        rp.H(soc__DOT__ppu__DOT__npix), rp.H(soc__DOT__ppu__DOT__rb_n),
                        rp.H(soc__DOT__ppu__DOT__pal_off), rp.H(soc__DOT__ppu__DOT__flip_x),
-                       rp.H(soc__DOT__ppu__DOT__blend));
+                       rp.H(soc__DOT__ppu__DOT__blend), rp.H(soc__DOT__ppu__DOT__m_tile));
             prev_rs = rs;
         }
         if (top->line_done) {

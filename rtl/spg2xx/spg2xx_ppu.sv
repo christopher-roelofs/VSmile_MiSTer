@@ -171,7 +171,7 @@ module spg2xx_ppu (
 
     // strip address pipeline: row = gfx + wpt*tile + bpr*line
     logic [21:0] m_gfx;
-    logic [15:0] m_tile;
+    logic [15:0] m_tile /* verilator public_flat_rd */;
     logic [5:0]  m_line, m_bpr;
     logic [11:0] m_wpt;
     logic [27:0] prod1;
@@ -324,7 +324,7 @@ module spg2xx_ppu (
                 ths = pg_attr[7:6];
                 tw  = 7'd8 << tws;
                 th  = 7'd8 << ths;
-                ncb = {pg_attr[1:0] + 2'd1, 1'b0};
+                ncb = {3'(pg_attr[1:0]) + 3'd1, 1'b0};    // 2, 4, 6 or 8 bits per pixel
                 if (!pg_ctrl[3] || pg_attr[13:12] != prio || pg_ctrl[0] || pg_ctrl[6]) begin
                     // disabled / other priority / linemap / vcmp (unsupported)
                     if (!page) page <= 1'b1;
@@ -447,7 +447,7 @@ module spg2xx_ppu (
                 attr = spr_w[3];
                 tws = attr[5:4]; ths = attr[7:6];
                 tw  = 7'd8 << tws; th = 7'd8 << ths;
-                ncb = {attr[1:0] + 2'd1, 1'b0};
+                ncb = {3'(attr[1:0]) + 3'd1, 1'b0};       // 2, 4, 6 or 8 bits per pixel
                 sx  = signed'(spr_w[1]);
                 sy  = signed'(spr_w[2]);
                 if (!spr_ctrl[1]) begin
