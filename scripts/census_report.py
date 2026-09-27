@@ -22,9 +22,14 @@ UNSUPPORTED_IO = [(0x3D40, 0x3D45, "SPI"), (0x3D50, 0x3D55, "serial ROM (SIO)"),
 
 def features(path):
     """Normalised feature set of one census file."""
+    return features_of(open(path, errors="replace"))
+
+
+def features_of(lines):
+    """Normalised feature set of census lines."""
     out = set()
-    for line in open(path, errors="replace"):
-        line = line.strip()
+    for line in lines:
+        line = line.split("\t")[0].strip()
         if not line or line.startswith("frames"):
             continue
         m = re.match(r"sprite bpp=(\d+) size=(\d+x\d+) ?(.*)", line)
@@ -71,34 +76,39 @@ def unsupported(f):
     return f.startswith("page ") and f.split()[1] in UNSUPPORTED_PAGE
 
 
-allc = load(sys.argv[1])
-verified = set().union(*load(sys.argv[2]).values()) if len(sys.argv) > 2 else set()
-use = defaultdict(list)
-for c, fs in allc.items():
-    for f in fs:
-        use[f].append(c)
+def main():
+    allc = load(sys.argv[1])
+    verified = set().union(*load(sys.argv[2]).values()) if len(sys.argv) > 2 else set()
+    use = defaultdict(list)
+    for c, fs in allc.items():
+        for f in fs:
+            use[f].append(c)
 
-print(f"# V.Smile feature census: {len(allc)} carts\n")
-print("## 1. Carts using features the core does not implement\n")
-bad = {c: sorted(f for f in fs if unsupported(f)) for c, fs in allc.items()}
-bad = {c: v for c, v in bad.items() if v}
-if not bad:
-    print("None.\n")
-for c in sorted(bad):
-    print(f"- {c}: {', '.join(bad[c])}")
-print()
+    print(f"# V.Smile feature census: {len(allc)} carts\n")
+    print("## 1. Carts using features the core does not implement\n")
+    bad = {c: sorted(f for f in fs if unsupported(f)) for c, fs in allc.items()}
+    bad = {c: v for c, v in bad.items() if v}
+    if not bad:
+        print("None.\n")
+    for c in sorted(bad):
+        print(f"- {c}: {', '.join(bad[c])}")
+    print()
 
-print("## 2. Implemented but never exercised by a MAME-verified cart\n")
-print("| feature | carts | examples |\n|---|---|---|")
-for f in sorted(use, key=lambda f: -len(use[f])):
-    if unsupported(f) or f in verified:
-        continue
-    ex = "; ".join(sorted(use[f])[:3])
-    print(f"| {f} | {len(use[f])} | {ex} |")
-print()
+    print("## 2. Implemented but never exercised by a MAME-verified cart\n")
+    print("| feature | carts | examples |\n|---|---|---|")
+    for f in sorted(use, key=lambda f: -len(use[f])):
+        if unsupported(f) or f in verified:
+            continue
+        ex = "; ".join(sorted(use[f])[:3])
+        print(f"| {f} | {len(use[f])} | {ex} |")
+    print()
 
-print("## 3. All features by number of carts\n")
-print("| feature | carts | verified |\n|---|---|---|")
-for f in sorted(use, key=lambda f: (-len(use[f]), f)):
-    v = "unsupported" if unsupported(f) else ("yes" if f in verified else "no")
-    print(f"| {f} | {len(use[f])} | {v} |")
+    print("## 3. All features by number of carts\n")
+    print("| feature | carts | verified |\n|---|---|---|")
+    for f in sorted(use, key=lambda f: (-len(use[f]), f)):
+        v = "unsupported" if unsupported(f) else ("yes" if f in verified else "no")
+        print(f"| {f} | {len(use[f])} | {v} |")
+
+
+if __name__ == "__main__":
+    main()

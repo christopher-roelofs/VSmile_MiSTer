@@ -17,6 +17,11 @@
 //   BIOS=path   system ROM (otherwise reads as 0xFFFF, like the traces)
 //   VERBOSE=1   print every retired instruction
 //   WAV=path    write the SPU output (stereo 16-bit, 70312 Hz) as a WAV file
+//   SWEEP_INPUT=1 replay scripts/census.lua's button script (free-run only)
+//   SWEEP_FRAMES=n stop after n frames
+//   CENSUS_OUT=path write the video features the RTL uses (census.lua's
+//               format, with the first frame each appeared)
+//   DUMP_BAD=dir write rtl/ref images of the first 8 frames with differing lines
 //   PRESS=f:m,... hold buttons mask m (1 ok, 2 quit, 4 help, 8 abc) for
 //               eight frames from frame f (free-run only)
 //   DUMP=dir    write every FRAMES-th frame (default 60) as dir/rtl_NNNN.ppm
@@ -50,6 +55,8 @@ typedef Vvsmile TopT;
 #include <string>
 #include <vector>
 #include <deque>
+#include <set>
+#include <string>
 
 struct TraceEntry {
     uint32_t pc;
@@ -256,6 +263,22 @@ int main(int argc, char** argv) {
     // ---- video reference ----
     auto& rp = *top->rootp;
     PpuRef ref;
+    // ---- sweep: census of the video features in use, input script ----
+    FILE* census = getenv("CENSUS_OUT") ? fopen(getenv("CENSUS_OUT"), "w") : nullptr;
+    std::set<std::string> census_seen;
+    uint32_t census_frame = 0;
+    auto cnote = [&](const std::string& k) {
+        if (census && census_seen.insert(k).second) { fprintf(census, "%s\t@%u\n", k.c_str(), census_frame); fflush(census); }
+    };
+    const bool sweep_input = getenv("SWEEP_INPUT") != nullptr;
+    const uint32_t sweep_frames = getenv("SWEEP_FRAMES") ? (uint32_t)atoi(getenv("SWEEP_FRAMES")) : 0;
+    const char* dump_bad = getenv("DUMP_BAD");
+    int dump_bad_n = 0;
+    // census.lua's script: {port 0 joy / 1 colours / 2 buttons, bit}
+    static const int sweep_script[16][2] = {
+        {2, 0}, {0, 3}, {2, 0}, {0, 1}, {2, 0}, {1, 0}, {0, 2}, {2, 0},
+        {1, 3}, {0, 0}, {2, 0}, {1, 1}, {2, 0}, {1, 2}, {2, 3}, {2, 0}};
+    int sweep_held = -1;
     ref.regs = (const uint16_t*)&rp.H(soc__DOT__vctl__DOT__regs)[0];
     ref.vram = (const uint16_t*)&rp.H(soc__DOT__vram)[0];
     ref.read = [&](uint32_t a) -> uint16_t {
@@ -512,6 +535,14 @@ int main(int argc, char** argv) {
             if (y == 239) {
                 if (frame_bad_lines)
                     printf("  frame %u: %u lines differ from the reference (%u pixels)\n", frame, frame_bad_lines, frame_bad_px);
+                if (frame_bad_lines && dump_bad && dump_bad_n < 8) {
+                    char path[512];
+                    snprintf(path, sizeof path, "%s/rtl_%05u.ppm", dump_bad, frame);
+                    { FILE* f = fopen(path, "wb"); fprintf(f, "P6 320 240 255\n"); fwrite(rtl_frame, 1, sizeof rtl_frame, f); fclose(f); }
+                    snprintf(path, sizeof path, "%s/ref_%05u.ppm", dump_bad, frame);
+                    { FILE* f = fopen(path, "wb"); fprintf(f, "P6 320 240 255\n"); fwrite(ref_frame, 1, sizeof ref_frame, f); fclose(f); }
+                    dump_bad_n++;
+                }
                 if (dump && (frame % dump_every) == 0) {
                     write_ppm("rtl", rtl_frame);
                     if (frame_bad_lines) write_ppm("ref", ref_frame);
@@ -522,6 +553,53 @@ int main(int argc, char** argv) {
                     for (auto& pr : presses) if (frame >= pr.first && frame < pr.first + 8) m |= pr.second;
                     top->buttons = m;
                 }
+                if (sweep_input) {
+                    if (sweep_held >= 0 && frame % 90 == 8) sweep_held = -1;
+                    if (frame > 300 && frame % 90 == 0) sweep_held = (frame / 90) % 16;
+                    int v[3] = {0, 0, 0};
+                    if (sweep_held >= 0) v[sweep_script[sweep_held][0]] = 1 << sweep_script[sweep_held][1];
+                    top->joy = v[0]; top->colors = v[1]; top->buttons = v[2];
+                }
+                if (census) {
+                    census_frame = frame;
+                    const uint16_t* R = ref.regs;
+                    auto bpp = [](uint16_t a) { return ((a & 3) + 1) * 2; };
+                    for (int p = 0; p < 2; p++) {
+                        uint16_t attr = R[0x12 + 6 * p], ctrl = R[0x13 + 6 * p];
+                        if (!(ctrl & 8)) continue;
+                        std::string fl;
+                        auto add = [&](const char* x) { if (!fl.empty()) fl += ","; fl += x; };
+                        if (ctrl & 0x001) add("LINEMAP");
+                        add((ctrl & 0x002) ? "regattr" : "exattr");
+                        if (ctrl & 0x004) add("wallpaper");
+                        if (ctrl & 0x010) add("rowscroll");
+                        if (ctrl & 0x040) add("VCMP");
+                        if (ctrl & 0x080) add("HICOLOR");
+                        if (ctrl & 0x100) add("blend");
+                        char b[128];
+                        snprintf(b, sizeof b, "page bpp=%d tile=%dx%d %s", bpp(attr), 8 << ((attr >> 4) & 3), 8 << ((attr >> 6) & 3), fl.c_str());
+                        cnote(b);
+                    }
+                    if ((frame % 6) == 0 && (R[0x42] & 1)) {
+                        for (int i = 0; i < 256; i++) {
+                            uint16_t tile = ref.vram[0x400 + i * 4], attr = ref.vram[0x400 + i * 4 + 3];
+                            if (!tile) continue;
+                            std::string fl;
+                            auto add = [&](const char* x) { if (!fl.empty()) fl += ","; fl += x; };
+                            if (attr & 0x4000) add("blend");
+                            if (attr & 0x0004) add("flipx");
+                            if (attr & 0x0008) add("flipy");
+                            char b[128];
+                            snprintf(b, sizeof b, "sprite bpp=%d size=%dx%d %s", bpp(attr), 8 << ((attr >> 4) & 3), 8 << ((attr >> 6) & 3), fl.c_str());
+                            cnote(b);
+                        }
+                    }
+                    char b[64];
+                    snprintf(b, sizeof b, "blendlevel=%d", R[0x2a] & 3); cnote(b);
+                    if (R[0x30]) cnote("fade used");
+                    if ((R[0x3c] & 0xff) != 0x20) { snprintf(b, sizeof b, "SATURATION %02X", R[0x3c] & 0xff); cnote(b); }
+                }
+                if (sweep_frames && frame >= sweep_frames) done = true;
                 frame_bad_lines = frame_bad_px = 0;
             }
         }

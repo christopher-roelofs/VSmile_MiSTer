@@ -1,3 +1,5 @@
 all/
 verified/
-all_run.log
+stamped/
+sweep/
+*_run*.log

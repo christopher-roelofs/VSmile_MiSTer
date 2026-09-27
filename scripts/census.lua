@@ -7,10 +7,12 @@ local space = cpu.spaces["program"]
 local out   = io.open(os.getenv("CENSUS_OUT"), "w")
 
 local seen = {}
+local frame = 0
+-- one line per feature: "<feature>\t@<first frame>"
 local function note(k)
     if not seen[k] then
         seen[k] = true
-        out:write(k, "\n")
+        out:write(k, "\t@", frame, "\n")
         out:flush()
     end
 end
@@ -101,7 +103,6 @@ local script = {
     {"buttons", "OK"}, {"colors", "Yellow"}, {"buttons", "ABC"}, {"buttons", "OK"},
 }
 local held = nil
-local frame = 0
 emu.register_frame_done(function()
     frame = frame + 1
     page(0)
