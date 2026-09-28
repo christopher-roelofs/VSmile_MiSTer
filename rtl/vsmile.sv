@@ -29,6 +29,10 @@ module vsmile (
     input  logic [7:0]  baby_buttons,   // yellow, blue, orange, green, red, cloud, ball, exit
     input  logic [1:0]  baby_mode,      // function switch: Play Time, Watch & Learn, Learn & Explore
     input  logic        dummy_bios,     // no system ROM: veesem's dummy instead of 0xFFFF
+    // Dora TV Adventure Globe (MAME doraglob): built-in ROM loaded as the
+    // cart, no controller ports, keys in a matrix scanned by port B
+    input  logic        dora,
+    input  logic [3:0]  dora_keys [1:5], // rows as MAME's P1_ROW1-5, pressed = 1
 
     output logic        mem_req,        // one-clk issue pulse (up to four out)
     output logic [23:0] mem_addr,
@@ -109,14 +113,14 @@ module vsmile (
     logic       pad_tx_v, kb_tx_v, pad_rts, kb_rts, pad_rts_evt, kb_rts_evt;
     logic [7:0] pad_tx_d, kb_tx_d;
     vsmile_pad pad1 (
-        .clk, .reset(reset || kbd || baby), .ce, .joy, .ud_level, .lr_level, .colors, .buttons,
+        .clk, .reset(reset || kbd || baby || dora), .ce, .joy, .ud_level, .lr_level, .colors, .buttons,
         .select(ctrl_select[0]),
         .rx_valid(uart_tx_valid), .rx_data(uart_tx_data),
         .tx_valid(pad_tx_v), .tx_data(pad_tx_d), .dbg(dbg_pad), .dbg_stale(dbg_pad_stale),
         .rts(pad_rts), .rts_evt(pad_rts_evt)
     );
     vsmile_kbd kbd1 (
-        .clk, .reset(reset || !kbd || baby), .ce,
+        .clk, .reset(reset || !kbd || baby || dora), .ce,
         .keys(kb_keys), .joy, .buttons(buttons[2:0]), .layout(kb_layout),
         .select(ctrl_select[0]),
         .rx_valid(uart_tx_valid), .rx_data(uart_tx_data),
@@ -138,10 +142,23 @@ module vsmile (
 
     // MAME portb_r: OFF (bit 7) / ON (bit 6) switches released, Restart off
     // (V.Smile Baby: MAME vsmileb portb_r 0x0080)
-    wire [15:0] portb_in = baby ? 16'h0080 : 16'h00c8;
+    // (Dora Globe: MAME P2, 0x0080 battery OK)
+    wire [15:0] portb_in = (baby || dora) ? 16'h0080 : 16'h00c8;
+
+    // MAME spg2xx_game_doraphone_state::porta_r: port B bits 1-5 low select
+    // key rows (bit 6 is an input here), read active low in bits 0-3; P1:
+    // slider "Play on TV" 0x0060, 0x0200 must be set (else it resets), bit
+    // 0x0100 clear = US NTSC, unused bits high
+    logic [3:0] dora_matrix;
+    always_comb begin
+        dora_matrix = 4'hf;
+        for (int r = 1; r <= 5; r++)
+            if (!portb_out[r]) dora_matrix &= ~dora_keys[r];
+    end
 
     // MAME vsmilem porta_r; vsmileb porta_r: 0x0302, bit 7 VTech intro
-    wire [15:0] porta_in = baby ? {8'h03, region[4], 7'h02} : motion ? 16'hC000 : 16'h0000;
+    wire [15:0] porta_in = dora ? {12'hFEE, dora_matrix} :
+                           baby ? {8'h03, region[4], 7'h02} : motion ? 16'hC000 : 16'h0000;
 
     // MAME portc_r
     wire [15:0] portc_in = {2'b00,
@@ -156,11 +173,11 @@ module vsmile (
     spg2xx soc (
         .clk, .reset, .ce, .clk_vid, .pal, .mame_timing, .spg28x(baby),
         .ext_req, .ext_wr, .ext_addr, .ext_wdata, .ext_ack, .ext_rdata, .cs_mode,
-        .porta_in, .portb_in, .portc_in(baby ? 16'h0000 : portc_in),
+        .porta_in, .portb_in, .portc_in(dora ? 16'hffff : baby ? 16'h0000 : portc_in),
         .porta_out(), .portb_out, .portc_out,
         .porta_oe(), .portb_oe, .portc_oe, .port_wr,
         .uart_tx_valid, .uart_tx_data, .uart_rx_valid, .uart_rx_data,
-        .extint(baby ? 2'b00 : ctrl_rts), .extint_evt(baby ? 2'b00 : ctrl_rts_evt),   // vsmileb: no controller ports
+        .extint((baby || dora) ? 2'b00 : ctrl_rts), .extint_evt((baby || dora) ? 2'b00 : ctrl_rts_evt),   // vsmileb, Dora: no controller ports
         .audio_l, .audio_r, .audio_strobe,
         .vpos, .hpos, .hcnt, .vblank,
         .out_x, .out_rgb, .out_rgb888, .line_done, .done_y, .ppu_overrun,
@@ -178,7 +195,7 @@ module vsmile (
             cs2         <= 1'b0;
             ctrl_select <= 2'b00;
         end else begin
-            if (port_wr[1] && portb_oe[1] && !baby) cs2 <= !portb_out[1];   // vsmileb: no portb_w
+            if (port_wr[1] && portb_oe[1] && !baby && !dora) cs2 <= !portb_out[1];   // vsmileb, Dora: key rows
             if (port_wr[2] && portc_oe[8]) ctrl_select[0] <= portc_out[8];
             if (port_wr[2] && portc_oe[9]) ctrl_select[1] <= portc_out[9];
         end

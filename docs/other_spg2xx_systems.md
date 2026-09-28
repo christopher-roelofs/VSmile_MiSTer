@@ -34,3 +34,34 @@ Notes (from https://vtech.pulkomandy.tk):
 
 Newer GeneralPlus systems (MobiGo, MobiGo 2, V.Baby, Tivi Boo: GPL162xx,
 µ'nSP 2.0, NAND) share the CPU family but are a different, larger SoC.
+
+## Dora TV Adventure Globe (supported)
+
+Load the ROM file as MAME has it (`doraglobe.bin`, no byte swap: the reset
+vector 0x5523 is word 0xFFF7 read little-endian) with "Load Cartridge".
+Console Auto recognises it by its resource names "DG_ML0nn" (16-bit
+characters; in the US and German ROMs, in none of the 272 V.Smile, Motion and
+Baby carts checked), since its reset vector is in the Baby range; Console
+"Dora Globe" forces the mode.  The core then uses the Globe's board wiring (MAME
+`spg2xx_game_doraphone_state`, `doraglobe` inputs).  Its ROM is linear
+(chip-select mode 0), which the V.Smile cart mapping already does; what
+differs is the I/O:
+
+* port A: P1 0xFEE0 (On/Off slider = "Play on TV" 0x0060; 0x0200 must be
+  set or it resets; 0x0100 clear = US NTSC) with a 4-bit key matrix in bits
+  0-3, active low, rows selected by port B bits 1-5 going low;
+* port B in 0x0080 (battery OK), port C 0xFFFF; no controllers, no UART
+  device, port B does not bank the ROM.
+
+With the V.Smile's port A (0) the Globe runs but never turns its display on
+(the slider reads as neither position).  With the Globe wiring the sim
+reaches the title menu like MAME, and a 3 s MAME trace runs in lockstep
+(`MAME_SYSTEM=doraglob MAME_ROM=other scripts/mame_trace.sh`, testbench
+`DORA=1`).  The UK/French/German sets share the driver; MAME notes the
+region bits are unverified for them.
+
+Controls: pad d-pad, A Enter, Select Back, R Repeat, Start Show Answer, B/X/Y
+the modes Adventure Play / Explore & Find / Learn & Explore; USB keyboard
+1-7 the continents (N. America, S. America, Europe, Africa, Asia, Australia,
+Antarctica), F1-F3 the modes, Enter, Esc Back, R Repeat, A Show Answer,
+arrows.

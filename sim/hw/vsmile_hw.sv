@@ -71,7 +71,7 @@ module vsmile_hw (
     logic [63:0] mem_rdata;
 
     vsmile console (
-        .clk, .reset, .ce, .clk_vid, .pal, .mame_timing, .region, .has_bios, .motion, .baby, .baby_buttons, .baby_mode, .dummy_bios,
+        .clk, .reset, .ce, .clk_vid, .pal, .mame_timing, .region, .has_bios, .motion, .baby, .baby_buttons, .baby_mode, .dummy_bios, .dora(1'b0), .dora_keys('{default: 4'd0}),
         .mem_req, .mem_addr, .mem_ack, .mem_rdata, .cart_mask,
         .joy, .ud_level, .lr_level, .kbd, .kb_keys, .kb_layout,
         .colors, .buttons,

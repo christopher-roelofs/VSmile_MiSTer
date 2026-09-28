@@ -118,10 +118,17 @@ as of this build.**
 
     /media/fat/_Console/VSmile_<date>.rbf
     /media/fat/games/VSmile/boot.rom        <- optional system ROM (vsmile_v103.bin)
+    /media/fat/games/VSmile/boot2.rom       <- optional V.Smile Motion system ROM
 
-Cartridges load from the OSD (`Load Cartridge`, plain `.bin` dumps as in
-MAME's `vsmile_cart` list).  Games boot without a system ROM; one can also
-be loaded from the OSD.  Options: TV mode (NTSC/PAL), region (sets the
+System ROMs load from these files when the core starts; games boot without
+them.  Cartridges load from the OSD (`Load Cartridge`, plain `.bin` dumps as
+in MAME's `vsmile_cart` list).  Console Auto picks the system per cart:
+V.Smile Baby (reset vector below 0x8000), V.Smile Motion (its "V.Smile\084"
+product record, with boot2.rom present), Dora TV Adventure Globe (its
+"DG_ML0" resource names), otherwise V.Smile.  Port 1 Auto plugs in the Smart
+Keyboard for the four keyboard carts (a key table only they carry; model US,
+or French/German by product number 80-091445/80-091444), otherwise the
+joystick.  Both can be forced in the OSD.  Options: TV mode (NTSC/PAL), region (sets the
 language the system ROM and games use), VTech intro on/off.  Controls:
 d-pad, Green/Blue/Yellow/Red, OK/Quit/Help/ABC on joystick 1 (a V.Smile
 joystick has exactly these).

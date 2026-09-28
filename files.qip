@@ -7,6 +7,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/spg2xx/spg2xx.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/vsmile_pad.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/vsmile_kbd.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/vsmile_baby.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/dl_match.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/vsmile.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/vsmile_video.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sdram.sv
