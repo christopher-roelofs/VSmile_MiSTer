@@ -392,9 +392,12 @@ always @(posedge clk_sys) begin
     joy_s     <= {joystick_0[0] | a_r, joystick_0[1] | a_l, joystick_0[2] | a_d, joystick_0[3] | a_u};  // right left down up
     colors_s  <= joystick_0[7:4];                                               // red yellow blue green
     buttons_s <= joystick_0[11:8] | {1'b0, kb_btn};                             // abc help quit ok
-    // V.Smile Baby: exit ball cloud red green orange blue yellow
-    baby_s    <= {joystick_0[9], joystick_0[11], joystick_0[10], joystick_0[7], joystick_0[4],
-                  joystick_0[8], joystick_0[5], joystick_0[6]};
+    // V.Smile Baby: exit ball cloud red green orange blue yellow; the Baby has
+    // no directions, so the d-pad doubles the colour buttons in the face
+    // button layout: up Blue (X), left Yellow (Y), down Green (B), right Red
+    baby_s    <= {joystick_0[9], joystick_0[11], joystick_0[10], joystick_0[7] | joystick_0[0],
+                  joystick_0[4] | joystick_0[2], joystick_0[8], joystick_0[5] | joystick_0[3],
+                  joystick_0[6] | joystick_0[1]};
 end
 
 wire [10:0] hcnt;

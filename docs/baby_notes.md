@@ -29,7 +29,9 @@ Time after reset).  Buttons: yellow 0x01FE, blue 0x03EE, orange 0x03DE, green
 0x03BE, red 0x02FE, cloud 0x03F6, ball 0x03FA, exit 0x03FC (`rtl/vsmile_baby.sv`).
 
 MiSTer: Green/Blue/Yellow/Red are the pad's colour buttons, OK = Orange,
-Quit = Exit, Help = Cloud, ABC = Ball; the function switch is the OSD option
+Quit = Exit, Help = Cloud, ABC = Ball.  The Baby has no directions, so the
+d-pad doubles the colour buttons: up Blue, left Yellow, down Green, right Red
+(where X, Y, B sit on a pad; Red is L).  The function switch is the OSD option
 "Baby Switch" (changes are sent live).
 
 ## System ROM
@@ -77,3 +79,6 @@ MAME plays correctly.
   logs timed events for `KBD_EVENTS`.
 * Barney: 11.5 M instructions lockstep, 0 of 29040 video lines differ,
   interrupts equal.
+* Sweep (`scripts/baby_sweep.sh`, MAME 0.264, no input, 3 s each): all 23
+  known Baby carts (20 .bin + the German Farm, German learndhge and Swedish
+  Pooh .u4 dumps) run in lockstep, 0 differing video lines, interrupts equal.
