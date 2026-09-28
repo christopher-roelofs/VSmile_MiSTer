@@ -184,12 +184,15 @@ module spg2xx_io (
     wire  [15:0] baud_lo    = spg28x ? uart_baud1 : {8'd0, uart_baud1[7:0]};
     wire  [16:0] uart_div   = 17'h10000 - {1'b0, 16'({uart_baud2[7:0], 8'd0} | baud_lo)};
     wire  [16:0] uart_div28 = 17'h10000 - {1'b0, uart_baud1};
-    // registered (the multiply is off the counters' load path); a baud or
-    // control write takes effect one clk later
+    // two register stages (divisor, then the multiply: off the counters'
+    // load path and the baud registers' fan-in); a baud or control write
+    // takes effect two clks later, long before the CPU can start a byte
+    logic [20:0] uart_bits;             // clocks per bit
     logic [23:0] uart_frame;
-    always_ff @(posedge clk)
-        uart_frame <= (spg28x && baud28) ? 24'(uart_ctrl[5] ? 11 : 10) * {7'd0, uart_div28}
-                                         : 24'(uart_ctrl[5] ? 11 : 10) * {3'd0, uart_div, 4'd0};
+    always_ff @(posedge clk) begin
+        uart_bits  <= (spg28x && baud28) ? {4'd0, uart_div28} : {uart_div, 4'd0};
+        uart_frame <= 24'(uart_ctrl[5] ? 11 : 10) * {3'd0, uart_bits};
+    end
 
     // ------------------------------------------------------------------
     // GPIO (MAME do_gpio)

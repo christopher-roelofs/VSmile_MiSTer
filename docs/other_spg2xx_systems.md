@@ -35,33 +35,27 @@ Notes (from https://vtech.pulkomandy.tk):
 Newer GeneralPlus systems (MobiGo, MobiGo 2, V.Baby, Tivi Boo: GPL162xx,
 µ'nSP 2.0, NAND) share the CPU family but are a different, larger SoC.
 
-## Dora TV Adventure Globe (supported)
+## Dora TV toys: moved to a future plug-and-play core
 
-Load the ROM file as MAME has it (`doraglobe.bin`, no byte swap: the reset
-vector 0x5523 is word 0xFFF7 read little-endian) with "Load Cartridge".
-Console Auto recognises it by its resource names "DG_ML0nn" (16-bit
-characters; in the US and German ROMs, in none of the 272 V.Smile, Motion and
-Baby carts checked), since its reset vector is in the Baby range; Console
-"Dora Globe" forces the mode.  The core then uses the Globe's board wiring (MAME
-`spg2xx_game_doraphone_state`, `doraglobe` inputs).  Its ROM is linear
-(chip-select mode 0), which the V.Smile cart mapping already does; what
-differs is the I/O:
+The Dora TV Adventure Globe and Explorer Phone ran in this core for a while
+(September 2026) and were taken out again: this core is for the V.Smile
+family only; the SPG2xx plug-and-play systems (these toys and MAME's other
+~235 `tvgames/spg2xx*.cpp` sets) are meant for a core of their own.  The
+work is on the local branch `dora-toys` (commits 3631c29, 3c18ade).  What it
+found, for that core:
 
-* port A: P1 0xFEE0 (On/Off slider = "Play on TV" 0x0060; 0x0200 must be
-  set or it resets; 0x0100 clear = US NTSC) with a 4-bit key matrix in bits
-  0-3, active low, rows selected by port B bits 1-5 going low;
-* port B in 0x0080 (battery OK), port C 0xFFFF; no controllers, no UART
-  device, port B does not bank the ROM.
-
-With the V.Smile's port A (0) the Globe runs but never turns its display on
-(the slider reads as neither position).  With the Globe wiring the sim
-reaches the title menu like MAME, and a 3 s MAME trace runs in lockstep
-(`MAME_SYSTEM=doraglob MAME_ROM=other scripts/mame_trace.sh`, testbench
-`DORA=1`).  The UK/French/German sets share the driver; MAME notes the
-region bits are unverified for them.
-
-Controls: pad d-pad, A Enter, Select Back, R Repeat, Start Show Answer, B/X/Y
-the modes Adventure Play / Explore & Find / Learn & Explore; USB keyboard
-1-7 the continents (N. America, S. America, Europe, Africa, Asia, Australia,
-Antarctica), F1-F3 the modes, Enter, Esc Back, R Repeat, A Show Answer,
-arrows.
+* the toys are SPG24x boards like MAME's `spg2xx_game_doraphone_state`: the
+  8 MB ROM linear (chip-select mode 0), no system ROM, no controllers;
+* port A = MAME P1 bits 15-4 with a 4-bit key matrix in bits 0-3 (active
+  low), rows selected by port B bits 1-6 going low; port B in 0x0080
+  (battery OK), port C 0xFFFF;
+* Globe P1: 0xFEE0 (On/Off slider "Play on TV" 0x0060; 0x0200 must be set or
+  it resets; 0x0100 clear = US NTSC).  With the V.Smile's port A (0) it runs
+  but never turns its display on.  Phone P1: 0xFE60 with the handset (bit 7,
+  active high) and a joystick (bits 12-15, active low), keys in 6 rows;
+* the ROM files load as MAME has them, no byte swap; the Globes (US, UK,
+  French, German) carry resource names "DG_ML0nn" (16-bit characters), the
+  Phones (US, French) no text, but a 16-byte run of code
+  (c3d24092c8d27296c8d64292c8d2c294) found in both and in no other ROM;
+* Globe: 3 s MAME trace in lockstep; the sim reaches the title menu like
+  MAME (`MAME_SYSTEM=doraglob MAME_ROM=other scripts/mame_trace.sh`).

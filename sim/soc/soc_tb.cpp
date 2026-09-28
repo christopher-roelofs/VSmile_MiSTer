@@ -233,11 +233,6 @@ int main(int argc, char** argv) {
     top->baby = getenv("BABY") ? 1 : 0;
     top->baby_buttons = 0;
     top->baby_mode = 0;
-    // DORA=1: Dora TV Adventure Globe (built-in ROM as <cart.bin>, key matrix idle)
-#ifndef HW_TOP
-    top->dora = getenv("DORA") ? 1 : 0;
-    for (int r = 0; r < 5; r++) top->dora_keys[r] = 0;
-#endif
     if (getenv("PAL")) top->pal = 1;
     // STICK_LEVEL=n: joystick level 3..7 on both axes (0/unset: full, as MAME)
     top->ud_level = getenv("STICK_LEVEL") ? atoi(getenv("STICK_LEVEL")) : 0;

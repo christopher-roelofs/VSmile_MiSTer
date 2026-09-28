@@ -58,8 +58,8 @@ module vsmile_kbd (
     logic [13:0] scan_t;
     logic [2:0]  scan_row;
     logic [12:0] kstate [0:4];          // MAME m_key_states
-    logic [3:0]  sent_joy, joy_q;
-    logic [2:0]  sent_buttons, buttons_q;
+    logic [3:0]  sent_joy;
+    logic [2:0]  sent_buttons;
     // bytes waiting to enter the FIFO (queue_tx), one per step
     logic [7:0]  pq [0:3];
     logic [2:0]  pq_n;
@@ -120,7 +120,7 @@ module vsmile_kbd (
             hello_t <= 25'(HELLO_PERIOD); hto_t <= 0;
             scan_t <= 0; scan_row <= 0;
             kstate <= '{default: 13'd0};
-            sent_joy <= 0; joy_q <= 0; sent_buttons <= 0; buttons_q <= 0;
+            sent_joy <= 0; sent_buttons <= 0;
             pq_n <= 0;
         end else if (ce) begin
             logic [4:0]  v_head, v_tail;
@@ -255,9 +255,13 @@ module vsmile_kbd (
                     if (v_idle_t == 0) begin push_b[push_n] = 8'h55; push_n = push_n + 1; end
                 end
 
-                // joystick / buttons (only when active and running)
+                // joystick / buttons (only when active and running), sent
+                // when they differ from what was last sent: MAME drops a
+                // change made while a byte is in flight (marks it stale and
+                // never resends it), which on hardware leaves the console
+                // seeing the stick held after a release that came mid-byte
                 if (v_active && v_state == S_RUN && v_empty && push_n == 0 && v_pq_n == 0) begin
-                    if (joy_c != joy_q) begin
+                    if (joy_c != v_sent_joy) begin
                         if ((joy_c ^ v_sent_joy) & 4'b0011) begin
                             push_b[push_n] = joy_c[0] ? 8'h87 : joy_c[1] ? 8'h8f : 8'h80;
                             push_n = push_n + 1; push_idle_reset = 1'b1;
@@ -267,7 +271,7 @@ module vsmile_kbd (
                             push_n = push_n + 1; push_idle_reset = 1'b1;
                         end
                         v_sent_joy = joy_c;
-                    end else if (buttons_c != buttons_q) begin
+                    end else if (buttons_c != v_sent_buttons) begin
                         logic [2:0] rise;
                         rise = (v_sent_buttons ^ buttons_c) & buttons_c;
                         if (rise[0]) begin push_b[push_n] = 8'ha1; push_n = push_n + 1; end
@@ -278,7 +282,6 @@ module vsmile_kbd (
                         v_sent_buttons = buttons_c;
                     end
                 end
-                joy_q <= joy_c; buttons_q <= buttons_c;
 
                 // matrix scan: one row per tick, first changed column (a
                 // second change in the same row is taken on the next pass)

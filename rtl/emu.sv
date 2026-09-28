@@ -49,7 +49,7 @@ localparam CONF_STR = {
     "O[2],TV Mode,NTSC,PAL;",
     "O[6:3],Region,US,UK,French,German,Spanish,Italian,Dutch,Portuguese,Chinese;",
     "O[7],VTech Intro,On,Off;",
-    "O[20:18],Console,Auto,V.Smile,V.Smile Motion,V.Smile Baby,Dora Globe;",
+    "O[13:12],Console,Auto,V.Smile,V.Smile Motion,V.Smile Baby;",
     "O[17:16],Baby Switch,Play Time,Watch & Learn,Learn & Explore;",
     "O[23:21],Port 1,Auto,Joystick,Keyboard US,Keyboard FR,Keyboard DE;",
     "O[11],Audio,Stereo,Mono (Pocket);",
@@ -151,19 +151,12 @@ wire        cart_motion;
 // run the same with an all-zero one in MAME), so the Baby needs no BIOS file.
 reg         cart_baby = 0;
 wire        cart_kbd, cart_kbd_ge, cart_kbd_fr;
-// Dora TV Adventure Globe (MAME doraglob, docs/other_spg2xx_systems.md): its
-// built-in ROM loads as a cart.  Its reset vector is in the Baby range, so
-// Auto looks for its resource names "DG_ML0nn" (16-bit characters, found in
-// the US and German ROMs, in no V.Smile or Baby cart) during the download.
-wire  [2:0] con_sel = status[20:18];  // Auto, V.Smile, Motion, Baby, Dora Globe
-wire        cart_dora;
-reg         dora = 0;
-always @(posedge clk_sys) dora <= (con_sel == 3'd0) ? cart_dora : (con_sel == 3'd4);
+wire  [1:0] con_sel = status[13:12];  // Auto, V.Smile, Motion, Baby
 reg  [7:0]  vec_lo;
 // (registered: a static mode that fans out across the SoC)
 reg         baby = 0;
-always @(posedge clk_sys) baby <= (con_sel == 3'd0) ? (cart_baby && !cart_dora) : (con_sel == 3'd3);
-wire        motion = (con_sel == 3'd0) ? (cart_motion && has_bios_motion && !cart_baby) : (con_sel == 3'd2);
+always @(posedge clk_sys) baby <= (con_sel == 2'd0) ? cart_baby : (con_sel == 2'd3);
+wire        motion = (con_sel == 2'd0) ? (cart_motion && has_bios_motion && !cart_baby) : (con_sel == 2'd2);
 reg  [7:0]  dl_lo;
 reg         dl_req;
 reg  [23:0] dl_waddr;
@@ -177,7 +170,6 @@ always @(posedge clk_sys) dl_q <= ioctl_download;
 wire dl_start = ioctl_download && !dl_q && !dl_is_bios;
 wire dl_cwr   = ioctl_download && ioctl_wr && !dl_is_bios;
 dl_match #(.N(11), .PAT("V.Smile\\084")) m_motion (clk_sys, dl_start, dl_cwr, ioctl_dout, cart_motion);
-dl_match #(.N(6),  .PAT("DG_ML0"))       m_dora   (clk_sys, dl_start, dl_cwr, ioctl_dout, cart_dora);
 // Smart Keyboard carts (US Smart Keyboard, German Smart Key 80-091444,
 // French Tip Tap 80-091445, Spanish Teclado 80-091447): a key table found in
 // all four and in no other cart; the product number picks the keyboard model
@@ -384,31 +376,7 @@ always @(posedge clk_sys) begin
     end
 end
 
-// Dora Globe keys (MAME doraglobe P1_ROW1-5, bits 0-3); pad: d-pad, A Enter,
-// Select Back, R Repeat, Start Show Answer, B/X/Y the mode buttons Adventure
-// Play / Explore & Find / Learn & Explore; keyboard: 1-7 the continents
-// (N. America, S. America, Europe, Africa, Asia, Australia, Antarctica),
-// F1-F3 the modes, Enter, Esc Back, R Repeat, A Show Answer, arrows
 reg  [3:0]  joy_s, colors_s, buttons_s;
-reg  [1:0]  kb_f23;           // F3 F2
-always @(posedge clk_sys) begin
-    if (ps2_key[10] != ps2_tog)
-        case ({ps2_key[8], ps2_key[7:0]})
-            9'h006: kb_f23[0] <= ps2_key[9];
-            9'h004: kb_f23[1] <= ps2_key[9];
-            default: ;
-        endcase
-    if (reset) kb_f23 <= 2'd0;
-end
-reg  [3:0]  dora_s [1:5];
-always @(posedge clk_sys) begin
-    dora_s[1] <= {joystick_0[10] | kb_keys[1][4], joystick_0[6] | kb_f23[1], kb_keys[0][0], kb_keys[0][4]};  // repeat, learn & explore, n.america, asia
-    dora_s[2] <= {joystick_0[9] | kb_btn[1], joystick_0[8] | kb_btn[0], kb_keys[0][1], kb_keys[0][2]};     // back, enter, s.america, europe
-    dora_s[3] <= {joystick_0[11] | kb_keys[2][1], joystick_0[4] | kb_btn[2], kb_keys[0][6], kb_keys[0][3]}; // show answer, adventure play, antarctica, africa
-    dora_s[4] <= {joystick_0[5] | kb_f23[0], 2'b00, kb_keys[0][5]};                                          // explore & find, (reset), -, australia
-    dora_s[5] <= {joy_s[1] | kb_keys[4][5], joy_s[3] | kb_keys[4][6], joy_s[2] | kb_keys[4][4], joy_s[0] | kb_keys[3][10]};  // down right left up
-end
-
 reg [7:0] baby_s;
 // Port 1: Auto plugs the Smart Keyboard in for a keyboard cart (model from
 // its product number, US otherwise; MAME has no Spanish model)
@@ -456,13 +424,11 @@ vsmile console
     .pal        (status[2]),
     .mame_timing(1'b0),
     .region     ({~status[7], lang}),
-    .has_bios   ((baby || dora) ? 1'b0 : motion ? has_bios_motion : has_bios_std),
+    .has_bios   (baby ? 1'b0 : motion ? has_bios_motion : has_bios_std),
     .motion     (motion),
     .baby       (baby),
     .baby_buttons(baby_s),
     .baby_mode  (status[17:16]),
-    .dora       (dora),
-    .dora_keys  (dora_s),
     .dummy_bios (1'b1),
 
     .mem_req    (mem_req),
@@ -476,7 +442,7 @@ vsmile console
     .lr_level   (lr_level_s),
     .colors     (colors_s),
     .buttons    (buttons_s),
-    .kbd        (kbd && !dora),
+    .kbd        (kbd),
     .kb_keys    (kb_keys),
     .kb_layout  (kb_layout),
 
