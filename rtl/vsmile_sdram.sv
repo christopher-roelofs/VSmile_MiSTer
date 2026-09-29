@@ -28,6 +28,14 @@ module vsmile_sdram (
     output logic [63:0] mem_rdata,
     output logic [23:0] ack_addr,
 
+    // second read client (the cart RAM save engine): sv_req held until
+    // sv_take (taken only when the console is not issuing), sv_ack with
+    // mem_rdata; one read at a time, so the console keeps its queue slots
+    input  logic        sv_req,
+    input  logic [23:0] sv_addr,
+    output logic        sv_take,
+    output logic        sv_ack,
+
     // download writes (one-clk pulse; wr_busy while it is in flight)
     input  logic        wr_req,
     input  logic [23:0] wr_addr,
@@ -45,6 +53,7 @@ module vsmile_sdram (
 );
 
     logic [23:0] q [0:3];
+    logic        q_sv [0:3];            // entry belongs to the save engine
     logic [2:0]  qh, qi, qt;            // next to complete / to issue / to fill
     logic        handed;                // ch1_req out, not yet taken
     logic [1:0]  inflight;              // taken by the controller, data not back
@@ -68,7 +77,12 @@ module vsmile_sdram (
             wr_want    <= 1'b0;
         end else begin
             if (mem_req) begin
-                q[qt[1:0]] <= mem_addr;
+                q[qt[1:0]]    <= mem_addr;
+                q_sv[qt[1:0]] <= 1'b0;
+                qt <= qt + 3'd1;
+            end else if (sv_take) begin
+                q[qt[1:0]]    <= sv_addr;
+                q_sv[qt[1:0]] <= 1'b1;
                 qt <= qt + 3'd1;
             end
             if (ch1_taken) handed <= 1'b0;
@@ -101,7 +115,9 @@ module vsmile_sdram (
     end
 
     assign wr_busy   = wr_pending || wr_want || wr_req;
-    assign mem_ack   = rd_ready_q;
+    assign sv_take   = sv_req && !mem_req && !reset && (qt - qh) < 3'd4;
+    assign mem_ack   = rd_ready_q && !q_sv[qh[1:0]];
+    assign sv_ack    = rd_ready_q &&  q_sv[qh[1:0]];
     assign mem_rdata = ch1_dout;
     assign ack_addr  = q[qh[1:0]];
 

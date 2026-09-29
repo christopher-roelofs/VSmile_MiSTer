@@ -48,7 +48,17 @@ dispatched on the high nibble:
   appears.  The core keeps it in SDRAM (words C00000-CFFFFF), zeroed when
   such a cart loads (MAME's fill without a save file); CPU writes to it are
   posted through the SoC's ext cache (which drops cached copies) and kept in
-  order with reads in the SDRAM glue.  Not saved to SD yet.
+  order with reads in the SDRAM glue.
+* Saving (the real cart's RAM is battery-backed; the program keeps its
+  gallery there): MiSTer mounts `saves/VSmile/<cart>.sav` for the cart
+  (`FS1` in the config string); a non-empty one is loaded into the cart RAM
+  at cart load instead of the clear, with the console held in reset.  "Save
+  Backup RAM" writes it back, as does opening the OSD after the program
+  wrote its RAM when Autosave is on.  The file is the 2 MB of words,
+  little-endian, 4096 blocks, moved a 512-byte block at a time through a
+  buffer (`rtl/vsmile_save.sv`); saving reads SDRAM through the glue's
+  second read client while the console runs.  Screenshots (Win+PrtScr,
+  `screenshots/VSmile/*.png`) are MiSTer's own and manual.
 
 MiSTer: Port 1 "Art Studio" (Auto for product numbers 80-0670xx, which also
 turns the cart RAM on); a USB mouse moves the pen a screen pixel per count

@@ -44,7 +44,7 @@ assign VIDEO_ARY     = 13'd3;
 `include "build_id.v"
 localparam CONF_STR = {
     "VSmile;;",
-    "F1,BIN,Load Cartridge;",
+    "FS1,BIN,Load Cartridge;",
     "-;",
     "O[2],TV Mode,NTSC,PAL;",
     "O[6:3],Region,US,UK,French,German,Spanish,Italian,Dutch,Portuguese,Chinese;",
@@ -53,6 +53,9 @@ localparam CONF_STR = {
     "O[17:16],Baby Switch,Play Time,Watch & Learn,Learn & Explore;",
     "O[23:21],Port 1,Auto,Joystick,Keyboard US,Keyboard FR,Keyboard DE,Gym Mat,Art Studio;",
     "O[11],Audio,Stereo,Mono (Pocket);",
+    "O[24],Autosave,Off,On;",
+    "RP,Load Backup RAM;",
+    "RQ,Save Backup RAM;",
     "O[9:8],Debug,Off,SDRAM reads,Console;",
     "-;",
     "R0,Reset;",
@@ -101,6 +104,12 @@ wire  [7:0] ioctl_dout;
 wire  [7:0] ioctl_index;
 reg         ioctl_wait;
 
+wire        img_mounted, img_readonly, sd_ack, sd_buff_wr;
+wire [63:0] img_size;
+wire [31:0] sd_lba;
+wire        sd_rd, sd_wr;
+wire [13:0] sd_buff_addr;
+wire [7:0]  sd_buff_dout, sd_buff_din;
 hps_io #(.CONF_STR(CONF_STR)) hps_io
 (
     .clk_sys         (clk_sys),
@@ -122,7 +131,20 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
     .ioctl_addr      (ioctl_addr),
     .ioctl_dout      (ioctl_dout),
     .ioctl_wait      (ioctl_wait),
-    .ioctl_index     (ioctl_index)
+    .ioctl_index     (ioctl_index),
+
+    .img_mounted     (img_mounted),
+    .img_readonly    (img_readonly),
+    .img_size        (img_size),
+    .sd_lba          ('{sd_lba}),
+    .sd_blk_cnt      ('{6'd0}),
+    .sd_rd           (sd_rd),
+    .sd_wr           (sd_wr),
+    .sd_ack          (sd_ack),
+    .sd_buff_addr    (sd_buff_addr),
+    .sd_buff_dout    (sd_buff_dout),
+    .sd_buff_din     ('{sd_buff_din}),
+    .sd_buff_wr      (sd_buff_wr)
 );
 
 ///////////////////////////////////////////////////////////////////////
@@ -197,16 +219,69 @@ reg  [24:0] cart_bytes;
 // C00000-CFFFFF, zeroed after such a cart loads (MAME's fill without a save
 // file) while the console is held in reset; the console's writes share the
 // download's SDRAM write port
+wire        mem_req, mem_ack;
+wire [23:0] mem_addr;
+wire [63:0] mem_rdata;
 wire        con_wr;
 wire [15:0] con_wdata;
 wire        wr_busy;
 reg         clr_active = 0, clr_req = 0;
 reg  [23:0] clr_addr;
 reg         clr_dl_q = 0;
+// Save file: MiSTer mounts saves/VSmile/<cart>.sav for the cart ("FS1")
+// before the download ends; a non-empty one is loaded into the cart RAM
+// instead of the clear.  Saved with "Save Backup RAM", or on opening the OSD
+// after the cart RAM was written when Autosave is on (as the Game Boy core).
+reg         bk_ena = 0, sav_pending = 0, bk_new_load = 0;
+wire        cart_dl = ioctl_download && !dl_is_bios;
+wire        sv_busy, sv_loading, sv_rd_req, sv_rd_take, sv_rd_ack, sv_wr_req;
+wire [23:0] sv_rd_addr, sv_wr_addr;
+wire [15:0] sv_wr_data;
+reg         old_bk_load = 0, old_bk_save = 0;
+wire        bk_load = status[25] || bk_new_load;
+wire        bk_save = status[26] || (sav_pending && OSD_STATUS && status[24]);
 always @(posedge clk_sys) begin
-    clr_dl_q <= ioctl_download && !dl_is_bios;
-    clr_req  <= 1'b0;
-    if (clr_dl_q && !(ioctl_download && !dl_is_bios) && cart_art) begin
+    if (cart_dl && !clr_dl_q) bk_ena <= 1'b0;
+    if (cart_dl && img_mounted && !img_readonly) bk_ena <= 1'b1;
+    if (con_wr && !OSD_STATUS) sav_pending <= 1'b1;
+    else if (sv_busy && !sv_loading) sav_pending <= 1'b0;
+    old_bk_load <= bk_load;
+    old_bk_save <= bk_save;
+end
+vsmile_save save_ram
+(
+    .clk          (clk_sys),
+    .reset        (~pll_locked),
+    .load         (cart_art && bk_ena && bk_load && !old_bk_load && !sv_busy),
+    .save         (cart_art && bk_ena && bk_save && !old_bk_save && !sv_busy && !clr_active),
+    .busy         (sv_busy),
+    .loading      (sv_loading),
+    .sd_lba       (sd_lba),
+    .sd_rd        (sd_rd),
+    .sd_wr        (sd_wr),
+    .sd_ack       (sd_ack),
+    .sd_buff_addr (sd_buff_addr[8:0]),
+    .sd_buff_dout (sd_buff_dout),
+    .sd_buff_din  (sd_buff_din),
+    .sd_buff_wr   (sd_buff_wr),
+    .rd_req       (sv_rd_req),
+    .rd_addr      (sv_rd_addr),
+    .rd_take      (sv_rd_take),
+    .rd_ack       (sv_rd_ack),
+    .rd_data      (mem_rdata),
+    .wr_req       (sv_wr_req),
+    .wr_addr      (sv_wr_addr),
+    .wr_data      (sv_wr_data),
+    .wr_busy      (wr_busy)
+);
+
+always @(posedge clk_sys) begin
+    clr_dl_q    <= ioctl_download && !dl_is_bios;
+    clr_req     <= 1'b0;
+    bk_new_load <= 1'b0;
+    if (clr_dl_q && !(ioctl_download && !dl_is_bios) && cart_art && bk_ena && |img_size) begin
+        bk_new_load <= 1'b1;
+    end else if (clr_dl_q && !(ioctl_download && !dl_is_bios) && cart_art) begin
         clr_active <= 1'b1;
         clr_addr   <= 24'hC00000;
     end else if (clr_active && !clr_req && !wr_busy) begin
@@ -250,9 +325,6 @@ always @(posedge clk_sys) begin
     cart_mask <= m;
 end
 
-wire        mem_req, mem_ack;
-wire [23:0] mem_addr;
-wire [63:0] mem_rdata;
 wire [25:0] ch1_addr;
 wire [15:0] ch1_din;
 wire        ch1_req, ch1_rnw, ch1_ready, ch1_taken;
@@ -266,9 +338,13 @@ vsmile_sdram sdram_glue
     .mem_addr   (mem_addr),
     .mem_ack    (mem_ack),
     .mem_rdata  (mem_rdata),
-    .wr_req     (dl_req || clr_req || con_wr),
-    .wr_addr    (dl_req ? dl_waddr : clr_req ? clr_addr : mem_addr),
-    .wr_data    ((dl_req || clr_req) ? (clr_req ? 16'd0 : dl_wdata) : con_wdata),
+    .sv_req     (sv_rd_req),
+    .sv_addr    (sv_rd_addr),
+    .sv_take    (sv_rd_take),
+    .sv_ack     (sv_rd_ack),
+    .wr_req     (dl_req || clr_req || sv_wr_req || con_wr),
+    .wr_addr    (dl_req ? dl_waddr : clr_req ? clr_addr : sv_wr_req ? sv_wr_addr : mem_addr),
+    .wr_data    (dl_req ? dl_wdata : clr_req ? 16'd0 : sv_wr_req ? sv_wr_data : con_wdata),
     .wr_busy    (wr_busy),
     .ch1_addr   (ch1_addr),
     .ch1_din    (ch1_din),
@@ -313,7 +389,7 @@ sdram sdram
 
 // registered: this net fans out to every flop in the design
 reg [1:0] rst_sync = 2'b11;
-always @(posedge clk_sys) rst_sync <= {rst_sync[0], RESET | status[0] | buttons[1] | ~pll_locked | ioctl_download | clr_active};
+always @(posedge clk_sys) rst_sync <= {rst_sync[0], RESET | status[0] | buttons[1] | ~pll_locked | ioctl_download | clr_active | sv_loading};
 wire reset = rst_sync[1];
 
 // region code on port C (MAME vsmile REGION dip)
@@ -407,6 +483,28 @@ always @(posedge clk_sys) begin
 end
 
 reg  [3:0]  joy_s, colors_s, buttons_s;
+// Gym Mat on the numeric keypad, laid out like the mat (MAME's keys): 7 red
+// 8 up 9 yellow / 4 left 5 centre 6 right / 1 blue 2 down 3 green; keypad
+// Enter OK (as Enter), 0 Quit, - Help
+reg  [10:0] kp;   // up down left right green blue yellow red centre quit help
+always @(posedge clk_sys) begin
+    if (ps2_key[10] != ps2_tog)
+        case ({ps2_key[8], ps2_key[7:0]})
+            9'h075: kp[0]  <= ps2_key[9];
+            9'h072: kp[1]  <= ps2_key[9];
+            9'h06B: kp[2]  <= ps2_key[9];
+            9'h074: kp[3]  <= ps2_key[9];
+            9'h07A: kp[4]  <= ps2_key[9];
+            9'h069: kp[5]  <= ps2_key[9];
+            9'h07D: kp[6]  <= ps2_key[9];
+            9'h06C: kp[7]  <= ps2_key[9];
+            9'h073: kp[8]  <= ps2_key[9];
+            9'h070: kp[9]  <= ps2_key[9];
+            9'h07B: kp[10] <= ps2_key[9];
+            default: ;
+        endcase
+    if (reset) kp <= 11'd0;
+end
 reg [7:0] baby_s;
 // Art Studio pen: position in screen pixels (the tablet reports about screen
 // coordinates); the USB mouse moves it a pixel per count (PS/2 dy is
@@ -454,9 +552,11 @@ always @(posedge clk_sys) begin
                  (port_sel == 3'd4 || (port_sel == 3'd0 && cart_kbd_ge)) ? 8'h44 : 8'h40;
 end
 always @(posedge clk_sys) begin
-    joy_s     <= {joystick_0[0] | a_r, joystick_0[1] | a_l, joystick_0[2] | a_d, joystick_0[3] | a_u};  // right left down up
-    colors_s  <= joystick_0[7:4];                                               // red yellow blue green
-    buttons_s <= joystick_0[11:8] | {1'b0, kb_btn};                             // abc help quit ok
+    joy_s     <= {joystick_0[0] | a_r, joystick_0[1] | a_l, joystick_0[2] | a_d, joystick_0[3] | a_u}
+                 | (mat ? {kp[3], kp[2], kp[1], kp[0]} : 4'd0);                 // right left down up
+    colors_s  <= joystick_0[7:4] | (mat ? {kp[7], kp[6], kp[5], kp[4]} : 4'd0); // red yellow blue green
+    buttons_s <= joystick_0[11:8] | {1'b0, kb_btn}                              // abc help quit ok
+                 | (mat ? {kp[8], kp[10], kp[9], 1'b0} : 4'd0);
     // V.Smile Baby: exit ball cloud red green orange blue yellow; the Baby has
     // no directions, so the d-pad doubles the colour buttons in the face
     // button layout: up Blue (X), left Yellow (Y), down Green (B), right Red

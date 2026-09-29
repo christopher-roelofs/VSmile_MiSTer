@@ -130,9 +130,12 @@ or French/German by product number 80-091445/80-091444), the Gym Mat for
 the four mat carts (80-09132x) and the Art Studio tablet for the Art Studio
 carts (80-0670xx, which also get their 2 MB cart RAM), otherwise the
 joystick.  Both can be forced in the OSD.  The mat's squares are on the pad
-as the joystick's buttons (arrows the d-pad, centre ABC/Start); the tablet's
-pen follows a USB mouse (left button presses) or the left stick (B presses).
-See docs/art_studio.md.  Options: TV mode (NTSC/PAL), region (sets the
+as the joystick's buttons (arrows the d-pad, centre ABC/Start) and on the
+numeric keypad laid out like the mat (7 8 9 / 4 5 6 / 1 2 3, Enter 0 -
+for Enter Exit Help); the tablet's pen follows a USB mouse (left button
+presses) or the left stick (B presses).  The Art Studio's drawings are kept
+in saves/VSmile/<cart>.sav (Save Backup RAM, or Autosave).  See
+docs/art_studio.md.  Options: TV mode (NTSC/PAL), region (sets the
 language the system ROM and games use), VTech intro on/off.  Controls:
 d-pad, Green/Blue/Yellow/Red, OK/Quit/Help/ABC on joystick 1 (a V.Smile
 joystick has exactly these).

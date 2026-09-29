@@ -94,6 +94,7 @@ module vsmile_hw (
     vsmile_sdram glue (
         .clk, .reset(sdram_init),
         .mem_req, .mem_addr, .mem_ack, .mem_rdata,
+        .sv_req(1'b0), .sv_addr(24'd0), .sv_take(), .sv_ack(),
         // as emu.sv: the download and the console's cart RAM writes share it
         .wr_req(wr_req || mem_wr), .wr_addr(mem_wr ? mem_addr : wr_addr),
         .wr_data(mem_wr ? mem_wdata : wr_data), .wr_busy,

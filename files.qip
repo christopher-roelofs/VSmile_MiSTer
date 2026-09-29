@@ -12,6 +12,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/vsmile.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/vsmile_video.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sdram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/vsmile_sdram.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/vsmile_save.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/emu.sv
 set_global_assignment -name VERILOG_FILE rtl/pll.v
 set_global_assignment -name QIP_FILE rtl/pll.qip
