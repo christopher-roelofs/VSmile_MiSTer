@@ -17,17 +17,33 @@
 //     0xBx; 1 s of silence sends a 0x55 keep-alive; unselected for 500 ms,
 //     the queue is dropped and 0x55 sent
 //
+// Pen mode (`pen`): the V.Smile Art Studio drawing tablet, from the Art
+// Studio cart's controller driver (no MAME model; see docs/art_studio.md):
+// the same handshake with device ID PEN_ID instead of 0x52, answered by the
+// cart with E6 D6 60 only (no 02 02), and no layout byte after it (the cart
+// would take a 0x4x byte for a pen header), no key
+// matrix; a pen change sends 0x40 | down, then X[9:4], {X[3:0], Y[7:6]},
+// Y[5:0].  X is horizontal, Y vertical, both about screen pixels (the
+// cart's cursor sits at ~X, Y+4; found by sweeping the pen in the sim).
+// The joystick and buttons as the keyboard's.
+//
 // Steps on `ce` (the 27 MHz tick), like vsmile_pad.
 
-module vsmile_kbd (
+module vsmile_kbd #(
+    parameter logic [7:0] PEN_ID = 8'h54   // unverified: the cart accepts any 0x5x
+) (
     input  logic        clk,
-    input  logic        reset,
+    input  logic        reset_in,
     input  logic        ce,
 
     input  logic [12:0] keys [0:4],     // matrix: rows as MAME's ROW0-4 ports
     input  logic [3:0]  joy,            // up, down, left, right
     input  logic [2:0]  buttons,        // ok, quit, help
     input  logic [7:0]  layout,         // 0x40 US, 0x42 FR, 0x44 GE
+    input  logic        pen,            // Art Studio tablet instead of the keyboard
+    input  logic        pen_down,
+    input  logic [9:0]  pen_x,          // horizontal
+    input  logic [7:0]  pen_y,          // vertical
 
     input  logic        select,
     input  logic        rx_valid,
@@ -37,6 +53,11 @@ module vsmile_kbd (
     output logic        rts,
     output logic        rts_evt
 );
+
+    // reset registered here, so its fan-out into the model gets the model's
+    // 4-clock paths (VSmile.sdc) instead of one clock from the reset tree
+    logic reset;
+    always_ff @(posedge clk) reset <= reset_in;
 
     localparam int unsigned TX_PERIOD     = 27_000_000 / 960;    // 28125
     localparam int unsigned RTS_TIMEOUT   = 27_000_000 / 2;      // 500 ms
@@ -60,6 +81,16 @@ module vsmile_kbd (
     logic [12:0] kstate [0:4];          // MAME m_key_states
     logic [3:0]  sent_joy;
     logic [2:0]  sent_buttons;
+    logic [18:0] sent_pen;              // {down, x, y} last sent
+    logic [19:0] stall_t;               // pen: queued, RTS up, unselected
+    logic        re_rts;
+    // pen report conditions, registered between steps (the model steps every
+    // 4th clk and these only change on a step): keeps the 19-bit compares
+    // out of the step's logic (timing)
+    logic        pen_rq, stall_hit;
+    logic        pen_c, pen_down_c;
+    logic [9:0]  pen_x_c;
+    logic [7:0]  pen_y_c;
     // bytes waiting to enter the FIFO (queue_tx), one per step
     logic [7:0]  pq [0:3];
     logic [2:0]  pq_n;
@@ -79,7 +110,13 @@ module vsmile_kbd (
         if (ce) begin
             sel_c <= select; joy_c <= joy; buttons_c <= buttons;
             keys_c <= keys; layout_c <= layout;
+            pen_c <= pen; pen_down_c <= pen_down; pen_x_c <= pen_x; pen_y_c <= pen_y;
         end
+    end
+
+    always_ff @(posedge clk) begin
+        pen_rq      <= pen_c && {pen_down_c, pen_x_c, pen_y_c} != sent_pen;
+        stall_hit   <= stall_t == 20'd540_000;
     end
 
     // MAME's translate(): matrix position -> code
@@ -120,7 +157,7 @@ module vsmile_kbd (
             hello_t <= 25'(HELLO_PERIOD); hto_t <= 0;
             scan_t <= 0; scan_row <= 0;
             kstate <= '{default: 13'd0};
-            sent_joy <= 0; sent_buttons <= 0;
+            sent_joy <= 0; sent_buttons <= 0; sent_pen <= '1; stall_t <= 0; re_rts <= 0;
             pq_n <= 0;
         end else if (ce) begin
             logic [4:0]  v_head, v_tail;
@@ -133,6 +170,7 @@ module vsmile_kbd (
             logic        v_out_valid;
             logic [7:0]  v_out;
             logic [3:0]  v_sent_joy;
+            logic [18:0] v_sent_pen;
             logic [2:0]  v_sent_buttons;
             logic [12:0] v_ks;
             v_head = head; v_tail = tail; v_empty = empty; v_tx_active = tx_active; v_sel = sel;
@@ -140,7 +178,7 @@ module vsmile_kbd (
             v_probe0 = probe0; v_probe1 = probe1;
             v_tx_t = tx_t; v_rts_t = rts_t; v_idle_t = idle_t; v_hello_t = hello_t; v_hto_t = hto_t;
             v_pq = pq; v_pq_n = pq_n; v_out_valid = 1'b0; v_out = 8'd0;
-            v_sent_joy = sent_joy; v_sent_buttons = sent_buttons;
+            v_sent_joy = sent_joy; v_sent_buttons = sent_buttons; v_sent_pen = sent_pen;
 
             // queue_tx of the oldest waiting byte
             if (v_pq_n != 0) begin
@@ -172,7 +210,8 @@ module vsmile_kbd (
                     if (v_state != S_RUN) begin
                         if (v_state >= S_RX1 && v_state <= S_RP2) v_state = v_state + 3'd1;
                         else if (v_state == S_RP3) begin
-                            push_b[push_n] = layout_c; push_n = push_n + 1; push_idle_reset = 1'b1;
+                            if (!pen_c) begin push_b[push_n] = layout_c; push_n = push_n + 1; end
+                            push_idle_reset = 1'b1;
                             v_state  = S_RUN;
                             v_idle_t = 25'(IDLE_PERIOD);
                             v_active = 1'b1;
@@ -209,11 +248,13 @@ module vsmile_kbd (
                         v_rts = 1'b0; v_rts_evt = 1'b1;
                         if (!v_sel) v_hello_t = 25'(HELLO_PERIOD);
                         else begin
-                            push_b[push_n] = 8'h52; push_n = push_n + 1;
-                            push_b[push_n] = 8'h52; push_n = push_n + 1;
-                            push_b[push_n] = 8'h52; push_n = push_n + 1;
+                            push_b[push_n] = pen_c ? PEN_ID : 8'h52; push_n = push_n + 1;
+                            push_b[push_n] = pen_c ? PEN_ID : 8'h52; push_n = push_n + 1;
+                            push_b[push_n] = pen_c ? PEN_ID : 8'h52; push_n = push_n + 1;
                             push_idle_reset = 1'b1;
-                            v_state = S_RX1;
+                            // (the Art Studio cart answers E6 D6 60 only,
+                            // without the keyboard carts' 02 02)
+                            v_state = pen_c ? S_RP1 : S_RX1;
                         end
                     end
                 end
@@ -249,6 +290,18 @@ module vsmile_kbd (
                         v_rts = 1'b0; v_rts_evt = 1'b1;
                     end
                 end
+                // pen: RTS raised while the console was busy sending (the
+                // Art Studio cart answers the handshake and deselects right
+                // away) leaves no edge for it to see; after 20 ms queued
+                // and unselected, drop RTS for a tick and raise it again
+                if (re_rts) begin
+                    v_rts = 1'b1; v_rts_evt = 1'b1; re_rts <= 1'b0;
+                end else if (pen_c && !v_empty && !v_tx_active && !v_sel && v_rts) begin
+                    if (stall_hit) begin
+                        v_rts = 1'b0; v_rts_evt = 1'b1; re_rts <= 1'b1; stall_t <= 0;
+                    end else stall_t <= stall_t + 20'd1;
+                end else stall_t <= 0;
+
                 // idle keep-alive (queue_tx directly: no idle reset)
                 if (v_idle_t != 0) begin
                     v_idle_t = v_idle_t - 25'd1;
@@ -280,12 +333,19 @@ module vsmile_kbd (
                         if (buttons_c == 3'd0) begin push_b[push_n] = 8'ha0; push_n = push_n + 1; end
                         if (push_n != 0) push_idle_reset = 1'b1;
                         v_sent_buttons = buttons_c;
+                    end else if (pen_rq) begin
+                        push_b[0] = {7'b0100000, pen_down_c};   // 0x40 hover, 0x41 tip pressed
+                        push_b[1] = {2'b00, pen_x_c[9:4]};
+                        push_b[2] = {2'b00, pen_x_c[3:0], pen_y_c[7:6]};
+                        push_b[3] = {2'b00, pen_y_c[5:0]};
+                        push_n = 3'd4; push_idle_reset = 1'b1;
+                        v_sent_pen = {pen_down_c, pen_x_c, pen_y_c};
                     end
                 end
 
                 // matrix scan: one row per tick, first changed column (a
                 // second change in the same row is taken on the next pass)
-                if (v_state == S_RUN) begin
+                if (v_state == S_RUN && !pen_c) begin
                     if (scan_t == 14'd1) begin
                         logic [12:0] ch;
                         v_ks = kstate[scan_row];
@@ -318,7 +378,7 @@ module vsmile_kbd (
             probe0 <= v_probe0; probe1 <= v_probe1;
             tx_t <= v_tx_t; rts_t <= v_rts_t; idle_t <= v_idle_t; hello_t <= v_hello_t; hto_t <= v_hto_t;
             pq <= v_pq; pq_n <= v_pq_n;
-            sent_joy <= v_sent_joy; sent_buttons <= v_sent_buttons;
+            sent_joy <= v_sent_joy; sent_buttons <= v_sent_buttons; sent_pen <= v_sent_pen;
             tx_valid <= v_out_valid; tx_data <= v_out;
         end
     end

@@ -13,3 +13,9 @@ set_multicycle_path -hold  3 -from [get_registers {*vsmile_pad:pad1|*}] -to [get
 # The Smart Keyboard model steps the same way (vsmile_kbd, 27 MHz tick).
 set_multicycle_path -setup 4 -from [get_registers {*vsmile_kbd:kbd1|*}] -to [get_registers {*vsmile_kbd:kbd1|*}]
 set_multicycle_path -hold  3 -from [get_registers {*vsmile_kbd:kbd1|*}] -to [get_registers {*vsmile_kbd:kbd1|*}]
+
+# The Port 1 device flags (keyboard / mat / tablet) are static settings that
+# change only with the OSD option or a cart load, and the controller models
+# are held in reset across a change: their paths get the models' 4 clocks.
+set_multicycle_path -setup 4 -from [get_registers {emu:emu|kbd emu:emu|mat emu:emu|pen}]
+set_multicycle_path -hold  3 -from [get_registers {emu:emu|kbd emu:emu|mat emu:emu|pen}]

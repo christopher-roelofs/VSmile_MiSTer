@@ -35,6 +35,7 @@ module vsmile_pad (
     input  logic [2:0] lr_level,        // 3..7 (0: full, 7) for left/right
     input  logic [3:0] colors,          // green, blue, yellow, red
     input  logic [3:0] buttons,         // ok, quit, help, abc
+    input  logic       lr_first,        // Gym Mat: its left/right byte goes before up/down
 
     input  logic       select,          // from console (port C)
     input  logic       rx_valid,        // byte from the console UART
@@ -125,8 +126,8 @@ module vsmile_pad (
         if ((v_stale & ST_JOY) != 0) begin
             v_sent_ud = cur_ud;
             v_sent_lr = cur_lr;
-            if ((v_stale & ST_UD) != 0) push(0, cur_ud);
-            if ((v_stale & ST_LR) != 0) push(1, cur_lr);
+            if ((v_stale & ST_UD) != 0) push(lr_first ? 1 : 0, cur_ud);
+            if ((v_stale & ST_LR) != 0) push(lr_first ? 0 : 1, cur_lr);
         end
         if ((v_stale & ST_COLORS) != 0) begin
             v_sent_colors = colors_c;
@@ -286,8 +287,8 @@ module vsmile_pad (
                     if (cur_ud != ud_q) v_stale = v_stale | ST_UD;
                     if (cur_lr != lr_q) v_stale = v_stale | ST_LR;
                 end else begin
-                    if (cur_ud != v_sent_ud) push(0, cur_ud);
-                    if (cur_lr != v_sent_lr) push(1, cur_lr);
+                    if (cur_ud != v_sent_ud) push(lr_first ? 1 : 0, cur_ud);
+                    if (cur_lr != v_sent_lr) push(lr_first ? 0 : 1, cur_lr);
                     v_sent_ud = cur_ud;
                     v_sent_lr = cur_lr;
                 end

@@ -35,13 +35,28 @@ module vsmile (
     input  logic        mem_ack,        // one clk, with mem_rdata, in issue order
     input  logic [63:0] mem_rdata,
     input  logic [22:0] cart_mask,      // cart size in words - 1
+    // cart RAM (MAME vsmile_nvram: the Art Studio carts' 2 MB): writes to
+    // it, one-clk pulses at mem_addr; mem_wbusy while one cannot be taken
+    input  logic        cart_ram,
+    output logic        mem_wr,
+    output logic [15:0] mem_wdata,
+    input  logic        mem_wbusy,
 
     // joystick on controller port 1 (port 2 is empty, as MAME's default)
     input  logic [3:0]  joy,            // up, down, left, right
     input  logic [2:0]  ud_level,       // stick level 3..7 per axis (0: full)
     input  logic [2:0]  lr_level,
+    // Gym Mat on controller port 1 instead of the joystick (joy/colors/
+    // buttons are then the mat's squares, laid out as on the pad)
+    input  logic        mat,
     // Smart Keyboard on controller port 1 instead of the joystick
     input  logic        kbd,
+    // Art Studio drawing tablet on controller port 1 (the keyboard model in
+    // pen mode): pen touching, position about screen pixels
+    input  logic        pen,
+    input  logic        pen_down,
+    input  logic [9:0]  pen_x,          // horizontal, 0-319
+    input  logic [7:0]  pen_y,          // vertical, 0-239
     input  logic [12:0] kb_keys [0:4],  // key matrix, rows as MAME's ROW0-4
     input  logic [7:0]  kb_layout,      // 0x40 US, 0x42 FR, 0x44 GE
     input  logic [3:0]  colors,         // green, blue, yellow, red
@@ -98,7 +113,7 @@ module vsmile (
     logic [2:0]  port_wr;
     logic        uart_tx_valid /* verilator public_flat_rd */, uart_rx_valid /* verilator public_flat_rd */;
     logic [7:0]  uart_tx_data /* verilator public_flat_rd */, uart_rx_data /* verilator public_flat_rd */;
-    logic [1:0]  ctrl_rts, ctrl_rts_evt, ctrl_select /* verilator public_flat_rd */;
+    logic [1:0]  ctrl_rts /* verilator public_flat_rd */, ctrl_rts_evt, ctrl_select /* verilator public_flat_rd */;
 
     assign dbg_uart_tx_v = uart_tx_valid; assign dbg_uart_tx_d = uart_tx_data;
     assign dbg_uart_rx_v = uart_rx_valid; assign dbg_uart_rx_d = uart_rx_data;
@@ -108,15 +123,30 @@ module vsmile (
     // has no device (RTS low)
     logic       pad_tx_v, kb_tx_v, pad_rts, kb_rts, pad_rts_evt, kb_rts_evt;
     logic [7:0] pad_tx_d, kb_tx_d;
+    // Gym Mat (MAME vsmile_mat_device): the joystick protocol with other
+    // codes, all of which the joystick model makes from remapped inputs:
+    // Red/Left 0x8B/0x8D = its down at levels 3/5, Yellow/Right 0xCB/0xCD =
+    // its left at levels 3/5, 0x90 | {Green, Down, Up, Centre} its colour
+    // byte, OK/Quit/Help/Blue 0xA1-0xA4 its buttons.  On the pad: arrows the
+    // d-pad, the colours as the joystick's, Centre the ABC button.
+    wire        m_up = joy[0], m_down = joy[1], m_left = joy[2], m_right = joy[3];
+    wire        m_green = colors[0], m_blue = colors[1], m_yellow = colors[2], m_red = colors[3];
+    wire [3:0]  p_joy     = mat ? {1'b0, m_yellow | m_right, m_red | m_left, 1'b0} : joy;
+    wire [2:0]  p_ud      = mat ? (m_red    ? 3'd3 : 3'd5) : ud_level;
+    wire [2:0]  p_lr      = mat ? (m_yellow ? 3'd3 : 3'd5) : lr_level;
+    wire [3:0]  p_colors  = mat ? {m_green, m_down, m_up, buttons[3]} : colors;
+    wire [3:0]  p_buttons = mat ? {m_blue, buttons[2:0]} : buttons;
     vsmile_pad pad1 (
-        .clk, .reset(reset || kbd || baby), .ce, .joy, .ud_level, .lr_level, .colors, .buttons,
+        .clk, .reset(reset || kbd || pen || baby), .ce, .joy(p_joy), .ud_level(p_ud), .lr_level(p_lr),
+        .colors(p_colors), .buttons(p_buttons), .lr_first(mat),
         .select(ctrl_select[0]),
         .rx_valid(uart_tx_valid), .rx_data(uart_tx_data),
         .tx_valid(pad_tx_v), .tx_data(pad_tx_d), .dbg(dbg_pad), .dbg_stale(dbg_pad_stale),
         .rts(pad_rts), .rts_evt(pad_rts_evt)
     );
     vsmile_kbd kbd1 (
-        .clk, .reset(reset || !kbd || baby), .ce,
+        .clk, .reset_in(reset || !(kbd || pen) || baby), .ce,
+        .pen, .pen_down, .pen_x, .pen_y,
         .keys(kb_keys), .joy, .buttons(buttons[2:0]), .layout(kb_layout),
         .select(ctrl_select[0]),
         .rx_valid(uart_tx_valid), .rx_data(uart_tx_data),
@@ -129,10 +159,11 @@ module vsmile (
         .clk, .reset(reset || !baby), .buttons(baby_buttons), .mode(baby_mode),
         .tx_valid(bb_tx_v), .tx_data(bb_tx_d)
     );
-    assign uart_rx_valid   = baby ? bb_tx_v : kbd ? kb_tx_v : pad_tx_v;
-    assign uart_rx_data    = baby ? bb_tx_d : kbd ? kb_tx_d : pad_tx_d;
-    assign ctrl_rts[0]     = kbd ? kb_rts      : pad_rts;
-    assign ctrl_rts_evt[0] = kbd ? kb_rts_evt  : pad_rts_evt;
+    wire        kbm = kbd || pen;       // keyboard model on port 1
+    assign uart_rx_valid   = baby ? bb_tx_v : kbm ? kb_tx_v : pad_tx_v;
+    assign uart_rx_data    = baby ? bb_tx_d : kbm ? kb_tx_d : pad_tx_d;
+    assign ctrl_rts[0]     = kbm ? kb_rts      : pad_rts;
+    assign ctrl_rts_evt[0] = kbm ? kb_rts_evt  : pad_rts_evt;
     assign ctrl_rts[1]     = 1'b0;
     assign ctrl_rts_evt[1] = 1'b0;
 
@@ -156,6 +187,7 @@ module vsmile (
     spg2xx soc (
         .clk, .reset, .ce, .clk_vid, .pal, .mame_timing, .spg28x(baby),
         .ext_req, .ext_wr, .ext_addr, .ext_wdata, .ext_ack, .ext_rdata, .cs_mode,
+        .ext_wbusy(mem_wbusy),
         .porta_in, .portb_in, .portc_in(baby ? 16'h0000 : portc_in),
         .porta_out(), .portb_out, .portc_out,
         .porta_oe(), .portb_oe, .portc_oe, .port_wr,
@@ -194,8 +226,13 @@ module vsmile (
     // order, so local completions queue with the others.
     wire bios_sel  = cs_mode[1] && ext_addr[21:20] == 2'b11;
     wire ext_local = bios_sel && !has_bios;
+    // cart RAM (MAME vsmile.cpp bank map, bank2): chip-select mode 1 maps it
+    // over 200000-3FFFFF, modes 2/3 over 200000-2FFFFF; SDRAM words C00000-
+    // CFFFFF (1 M words: MAME returns 0 above its size, this mirrors)
+    wire ram_sel = cart_ram && ((cs_mode == 2'd1 && ext_addr[21]) || (cs_mode[1] && ext_addr[21:20] == 2'b10));
     always_comb begin
-        if (bios_sel) mem_addr = {2'b10, baby, motion && !baby, ext_addr[19:0]};
+        if (ram_sel)       mem_addr = {4'hC, ext_addr[19:0]};
+        else if (bios_sel) mem_addr = {2'b10, baby, motion && !baby, ext_addr[19:0]};
         else          mem_addr = {1'b0, 23'({cs2, ext_addr}) & cart_mask};
     end
     logic [3:0] lq_local;
@@ -216,8 +253,12 @@ module vsmile (
     // memory in simulation: the read being issued is then the head)
     wire lq_empty   = (lq_h == lq_t);
     wire head_local = lq_empty ? ext_local : lq_local[lq_h[1:0]];
-    assign mem_req   = ext_req && !ext_local;
-    assign ext_ack   = (!lq_empty || ext_req) && (head_local || mem_ack);
+    // writes are posted: not queued, no answer; only cart RAM takes them
+    wire   ext_rd    = ext_req && !ext_wr;
+    assign mem_req   = ext_rd && !ext_local;
+    assign mem_wr    = ext_req && ext_wr && ram_sel;
+    assign mem_wdata = ext_wdata;
+    assign ext_ack   = (!lq_empty || ext_rd) && (head_local || mem_ack);
     assign ext_rdata = head_local ? {local_word(head_d31[3]), local_word(head_d31[2]),
                                      local_word(head_d31[1]), local_word(head_d31[0])} : mem_rdata;
     always_ff @(posedge clk) begin
@@ -225,7 +266,7 @@ module vsmile (
             lq_h <= 3'd0;
             lq_t <= 3'd0;
         end else begin
-            if (ext_req) begin
+            if (ext_rd) begin
                 lq_local[lq_t[1:0]] <= ext_local;
                 lq_d31[lq_t[1:0]]   <= d31;
                 lq_t <= lq_t + 3'd1;

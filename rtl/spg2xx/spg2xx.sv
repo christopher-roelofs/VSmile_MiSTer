@@ -35,6 +35,7 @@ module spg2xx (
     output logic [21:0] ext_addr,
     output logic [15:0] ext_wdata,
     input  logic        ext_ack,        // one clk, with ext_rdata for reads
+    input  logic        ext_wbusy,      // a write cannot be taken now
     input  logic [63:0] ext_rdata,
     output logic [1:0]  cs_mode,
 
@@ -561,10 +562,19 @@ module spg2xx (
                     touch(hit_line_r);
                     ast <= A_IDLE;
                 end else if (xq_wr) begin
-                    // the external bus only holds ROM: writes do nothing
-                    // (MAME's cart slot ignores them)
-                    complete(16'hffff);
-                    ast <= A_IDLE;
+                    // posted write (cart RAM, e.g. the Art Studio's; the
+                    // platform drops writes elsewhere): after any read of
+                    // this group in flight, and dropping cached copies
+                    if (!tag_pending && !ext_wbusy) begin
+                        ext_req   <= 1'b1;
+                        ext_wr    <= 1'b1;
+                        ext_addr  <= xq_addr;
+                        ext_wdata <= xq_wdata;
+                        for (int i = 0; i < NL; i++)
+                            if (rl_tag[i] == xq_addr[21:2]) rl_valid[i] <= 1'b0;
+                        complete(16'hffff);
+                        ast <= A_IDLE;
+                    end
                 end else if (tag_pending) begin
                     ast <= A_CHK;           // re-check once that fetch lands
                 end else if (pq_n < 3'd3) begin

@@ -240,6 +240,18 @@ int main(int argc, char** argv) {
     // KBD=1: Smart Keyboard (US) on port 1; KBD_EVENTS=file replays
     // scripts/kbd_input.lua's log ("frame row col 1|0", row 5 = buttons)
     top->kbd = getenv("KBD") ? 1 : 0;
+    // MAT=1: Gym Mat on port 1 (KBD_EVENTS rows 8/9/5 = d-pad, colours, buttons)
+    top->mat = getenv("MAT") ? 1 : 0;
+#ifndef HW_TOP
+    top->cart_ram = getenv("CART_RAM") ? 1 : 0;
+#endif
+#ifndef HW_TOP
+    // PEN=1: Art Studio tablet on port 1; PEN_XY=x,y,down its pen (static;
+    // x horizontal 0-319, y vertical 0-239, about screen pixels)
+    top->pen = getenv("PEN") ? 1 : 0;
+    top->pen_down = 0; top->pen_x = 0; top->pen_y = 0;
+    if (getenv("PEN_XY")) { unsigned x = 0, y = 0, d = 0; sscanf(getenv("PEN_XY"), "%u,%u,%u", &x, &y, &d); top->pen_x = x; top->pen_y = y; top->pen_down = d; }
+#endif
     top->kb_layout = 0x40;
     for (int r = 0; r < 5; r++) top->kb_keys[r] = 0;
     // an optional fifth column is MAME's emulated time of the event (s):
@@ -266,6 +278,18 @@ int main(int argc, char** argv) {
             if (e.down) top->baby_buttons |= (1u << e.col); else top->baby_buttons &= ~(1u << e.col);
         } else if (e.row == 7) {
             if (e.down) top->baby_mode = e.col;
+        } else if (e.row == 8) {        // pad/mat d-pad: up down left right
+            if (e.down) top->joy |= (1u << e.col); else top->joy &= ~(1u << e.col);
+        } else if (e.row == 9) {        // pad/mat colours: green blue yellow red
+            if (e.down) top->colors |= (1u << e.col); else top->colors &= ~(1u << e.col);
+#ifndef HW_TOP
+        } else if (e.row == 10) {       // Art Studio pen: x = col
+            top->pen_x = e.col;
+        } else if (e.row == 11) {       // pen y = col
+            top->pen_y = e.col;
+        } else if (e.row == 12) {       // pen down = col
+            top->pen_down = e.col;
+#endif
         } else if (e.row < 5) {
             if (e.down) top->kb_keys[e.row] |= (1u << e.col); else top->kb_keys[e.row] &= ~(1u << e.col);
         } else {
@@ -429,6 +453,11 @@ int main(int argc, char** argv) {
         static const int memlat = getenv("MEMLAT") ? atoi(getenv("MEMLAT")) : 0;
         static const int memgap = getenv("MEMGAP") ? atoi(getenv("MEMGAP")) : 1;
         static std::deque<std::pair<uint32_t, uint64_t>> mq;
+        // cart RAM (CART_RAM=1: the Art Studio's), written by posted writes
+        static std::vector<uint16_t> cartram(0x100000, 0);
+        top->mem_wbusy = 0;
+        if (top->mem_wr && top->mem_addr >= 0xC00000 && top->mem_addr < 0xD00000)
+            cartram[top->mem_addr - 0xC00000] = top->mem_wdata;
         static uint64_t last_ack = 0;
         top->mem_ack = 0;
         if (top->mem_req) mq.push_back({top->mem_addr, clk_n});
@@ -439,7 +468,8 @@ int main(int argc, char** argv) {
             for (int i = 3; i >= 0; i--) {
                 uint32_t a = base + i;
                 uint16_t v = 0xffff;
-                if (a < 0x800000) v = cart[a & (cart_words - 1)];
+                if (a >= 0xC00000 && a < 0xD00000) v = cartram[a - 0xC00000];
+                else if (a < 0x800000) v = cart[a & (cart_words - 1)];
                 else if (!bios.empty()) v = bios[(a & 0xfffff) % bios.size()];
                 g = (g << 16) | v;
             }
@@ -529,6 +559,10 @@ int main(int argc, char** argv) {
                 int rxirq = r.H(soc__DOT__io__DOT__rx_irq);
                 if (rxirq != last_rxirq) { printf("  [%llu] rx_irq %d\n", (unsigned long long)n, rxirq); last_rxirq = rxirq; }
                 if (r.H(uart_tx_valid)) printf("  [%llu] console->pad %02X sel=%d\n", (unsigned long long)n, r.H(uart_tx_data), r.H(ctrl_select) & 1);
+                static int last_sel = -1, last_rts = -1;
+                int sel = r.H(ctrl_select) & 1, rts = r.H(ctrl_rts) & 1;
+                if (sel != last_sel) { printf("  [%llu] select %d\n", (unsigned long long)n, sel); last_sel = sel; }
+                if (rts != last_rts) { printf("  [%llu] rts %d\n", (unsigned long long)n, rts); last_rts = rts; }
             }
         }
 
@@ -699,6 +733,25 @@ int main(int argc, char** argv) {
         }
 
         if (top->dbg_fetch) {
+            // PC_HIST=first,last,file: count executed PCs in frames first..last
+            static FILE* pch_f = nullptr;
+            static unsigned pch_a = 0, pch_b = 0;
+            static std::map<uint32_t, uint32_t> pch;
+            static bool pch_init = false;
+            if (!pch_init) {
+                pch_init = true;
+                if (const char* e = getenv("PC_HIST")) {
+                    char fn[512] = "";
+                    if (sscanf(e, "%u,%u,%511s", &pch_a, &pch_b, fn) == 3) pch_f = fopen(fn, "w");
+                }
+            }
+            if (pch_f) {
+                if (frame >= pch_a && frame <= pch_b) pch[top->dbg_pc]++;
+                else if (frame > pch_b) {
+                    for (auto& kv : pch) fprintf(pch_f, "%06X %u\n", kv.first, kv.second);
+                    fclose(pch_f); pch_f = nullptr;
+                }
+            }
             if (trace_ok && !trace_done) {
                 if (!trace.next(cur)) {
                     printf("trace exhausted (end of capture)\n");

@@ -278,7 +278,15 @@ module spg2xx_spu (
     logic [15:0] x_q;
 
     assign irq = (x[X_BEAT_CNT] & 16'hc000) == 16'hc000;
-    assign fiq = x[X_FIQ_ST] != 16'd0;
+    // x[X_FIQ_ST] != 0, kept as its own register (updated where the status
+    // is written, in the same order) so the CPU's interrupt check does not
+    // start from a 16-bit OR (timing)
+    logic fiq_nz;
+    assign fiq = fiq_nz;
+`ifdef VERILATOR
+    always_ff @(posedge clk)
+        if (!reset && fiq_nz != (x[X_FIQ_ST] != 16'd0)) $display("SPU FIQ FLAG MISMATCH %04x", x[X_FIQ_ST]);
+`endif
 
     // ------------------------------------------------------------------
     // Sample processing helpers (operate on the working copy)
@@ -308,6 +316,7 @@ module spg2xx_spu (
             tick_pending <= 0;
             pend_start <= 0; pend_stop <= 0; pend_ramp <= 0;
             fiq_timer_on <= 0;
+            fiq_nz <= 1'b0;
             mem_req <= 1'b0;
             out_l <= 0; out_r <= 0;
             acc <= '{default: 19'd0}; shift <= '{default: 4'd0};
@@ -439,7 +448,7 @@ module spg2xx_spu (
 
             E_FETCH: begin  // MAME fetch_sample, part 1
                 w[C_WDATA_PREV] <= w[C_WDATA];
-                if (fiq_timer_on[ch]) x[X_FIQ_ST][ch] <= 1'b1;
+                if (fiq_timer_on[ch]) begin x[X_FIQ_ST][ch] <= 1'b1; fiq_nz <= 1'b1; end
                 if (hdr_need) begin
                     mem_req  <= 1'b1;
                     mem_addr <= w_waddr;
@@ -877,7 +886,7 @@ module spg2xx_spu (
                 pend_stop     <= (pend_stop | sp) & ~st;
             end
             X_MAINVOL:   x[o] <= d & 16'h007f;
-            X_FIQ_ST:    x[o] <= x[o] & ~d;
+            X_FIQ_ST:    begin x[o] <= x[o] & ~d; fiq_nz <= (x[o] & ~d) != 16'd0; end
             X_BEAT_BASE: begin x[o] <= d & 16'h07ff; beat_curr <= d[10:0]; end
             X_BEAT_CNT:  x[o] <= ((x[o] & ~(d & 16'h4000)) & 16'h4000) | (d & ~16'h4000);
             X_ENVCLK0, X_ENVCLK1: begin

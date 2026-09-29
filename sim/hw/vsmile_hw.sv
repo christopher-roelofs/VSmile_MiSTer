@@ -18,6 +18,7 @@ module vsmile_hw (
     input  logic        dummy_bios,
     input  logic [2:0]  ud_level, lr_level,
     input  logic        kbd,
+    input  logic        mat,
     input  logic [12:0] kb_keys [0:4],
     input  logic [7:0]  kb_layout,
     input  logic [22:0] cart_mask,
@@ -69,10 +70,13 @@ module vsmile_hw (
     logic        mem_req, mem_ack;
     logic [23:0] mem_addr;
     logic [63:0] mem_rdata;
+    logic        mem_wr;
+    logic [15:0] mem_wdata;
 
     vsmile console (
-        .clk, .reset, .ce, .clk_vid, .pal, .mame_timing, .region, .has_bios, .motion, .baby, .baby_buttons, .baby_mode, .dummy_bios,
+        .clk, .reset, .ce, .clk_vid, .pal, .mame_timing, .region, .has_bios, .motion, .baby, .baby_buttons, .baby_mode, .dummy_bios, .mat, .pen(1'b0), .pen_down(1'b0), .pen_x(10'd0), .pen_y(8'd0),
         .mem_req, .mem_addr, .mem_ack, .mem_rdata, .cart_mask,
+        .cart_ram(1'b0), .mem_wr, .mem_wdata, .mem_wbusy(wr_busy),
         .joy, .ud_level, .lr_level, .kbd, .kb_keys, .kb_layout,
         .colors, .buttons,
         .audio_l, .audio_r, .audio_strobe,
@@ -90,7 +94,9 @@ module vsmile_hw (
     vsmile_sdram glue (
         .clk, .reset(sdram_init),
         .mem_req, .mem_addr, .mem_ack, .mem_rdata,
-        .wr_req, .wr_addr, .wr_data, .wr_busy,
+        // as emu.sv: the download and the console's cart RAM writes share it
+        .wr_req(wr_req || mem_wr), .wr_addr(mem_wr ? mem_addr : wr_addr),
+        .wr_data(mem_wr ? mem_wdata : wr_data), .wr_busy,
         .ch1_addr, .ch1_din, .ch1_req, .ch1_rnw, .ch1_dout, .ch1_ready, .ch1_taken, .ack_addr
     );
 

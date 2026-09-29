@@ -51,7 +51,7 @@ localparam CONF_STR = {
     "O[7],VTech Intro,On,Off;",
     "O[13:12],Console,Auto,V.Smile,V.Smile Motion,V.Smile Baby;",
     "O[17:16],Baby Switch,Play Time,Watch & Learn,Learn & Explore;",
-    "O[23:21],Port 1,Auto,Joystick,Keyboard US,Keyboard FR,Keyboard DE;",
+    "O[23:21],Port 1,Auto,Joystick,Keyboard US,Keyboard FR,Keyboard DE,Gym Mat,Art Studio;",
     "O[11],Audio,Stereo,Mono (Pocket);",
     "O[9:8],Debug,Off,SDRAM reads,Console;",
     "-;",
@@ -89,6 +89,7 @@ wire  [1:0] buttons;
 wire [127:0] status;
 wire [31:0] joystick_0;
 wire [10:0] ps2_key;          // {toggle, pressed, extended, set-2 scancode}
+wire [24:0] ps2_mouse;        // {toggle, dy, dx, status (buttons, signs)}
 wire [15:0] joystick_l_analog_0;      // {Y, X} signed, left stick
 wire        forced_scandoubler;
 wire [21:0] gamma_bus;
@@ -113,6 +114,7 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 
     .joystick_0      (joystick_0),
     .ps2_key         (ps2_key),
+    .ps2_mouse       (ps2_mouse),
     .joystick_l_analog_0(joystick_l_analog_0),
 
     .ioctl_download  (ioctl_download),
@@ -150,7 +152,7 @@ wire        cart_motion;
 // then runs the Baby.  Baby carts do not use the system ROM (they boot and
 // run the same with an all-zero one in MAME), so the Baby needs no BIOS file.
 reg         cart_baby = 0;
-wire        cart_kbd, cart_kbd_ge, cart_kbd_fr;
+wire        cart_kbd, cart_kbd_ge, cart_kbd_fr, cart_mat, cart_art;
 wire  [1:0] con_sel = status[13:12];  // Auto, V.Smile, Motion, Baby
 reg  [7:0]  vec_lo;
 // (registered: a static mode that fans out across the SoC)
@@ -176,6 +178,12 @@ dl_match #(.N(11), .PAT("V.Smile\\084")) m_motion (clk_sys, dl_start, dl_cwr, io
 dl_match #(.N(12), .PAT("QRwklSfghjio")) m_kbd    (clk_sys, dl_start, dl_cwr, ioctl_dout, cart_kbd);
 dl_match #(.N(7),  .PAT("8091444"))      m_kbd_ge (clk_sys, dl_start, dl_cwr, ioctl_dout, cart_kbd_ge);
 dl_match #(.N(7),  .PAT("8091445"))      m_kbd_fr (clk_sys, dl_start, dl_cwr, ioctl_dout, cart_kbd_fr);
+// Gym Mat carts (Jammin' Gym Class 80-091320, Lern- und Tanzmatte 80-091324,
+// Tapis Multisport 80-091325, Gimnasio Interactivo 80-091327)
+dl_match #(.N(6),  .PAT("809132"))       m_mat    (clk_sys, dl_start, dl_cwr, ioctl_dout, cart_mat);
+// Art Studio carts (80-0670xx: US 067000, UK 067003, DE 067004, FR 067005,
+// SE 067021, ...)
+dl_match #(.N(5),  .PAT("80670"))        m_art    (clk_sys, dl_start, dl_cwr, ioctl_dout, cart_art);
 always @(posedge clk_sys) begin
     if (dl_cwr) begin
         if (ioctl_addr == 25'h1FFEE) vec_lo <= ioctl_dout;
@@ -184,6 +192,29 @@ always @(posedge clk_sys) begin
     if (dl_start) cart_baby <= 0;
 end
 reg  [24:0] cart_bytes;
+
+// Cart RAM (the Art Studio carts' 2 MB, MAME vsmile_nvram): SDRAM words
+// C00000-CFFFFF, zeroed after such a cart loads (MAME's fill without a save
+// file) while the console is held in reset; the console's writes share the
+// download's SDRAM write port
+wire        con_wr;
+wire [15:0] con_wdata;
+wire        wr_busy;
+reg         clr_active = 0, clr_req = 0;
+reg  [23:0] clr_addr;
+reg         clr_dl_q = 0;
+always @(posedge clk_sys) begin
+    clr_dl_q <= ioctl_download && !dl_is_bios;
+    clr_req  <= 1'b0;
+    if (clr_dl_q && !(ioctl_download && !dl_is_bios) && cart_art) begin
+        clr_active <= 1'b1;
+        clr_addr   <= 24'hC00000;
+    end else if (clr_active && !clr_req && !wr_busy) begin
+        if (clr_addr == 24'hD00000) clr_active <= 1'b0;
+        else clr_req <= 1'b1;
+    end
+    if (clr_req) clr_addr <= clr_addr + 24'd1;
+end
 
 always @(posedge clk_sys) begin
     dl_req <= 0;
@@ -222,7 +253,6 @@ end
 wire        mem_req, mem_ack;
 wire [23:0] mem_addr;
 wire [63:0] mem_rdata;
-wire        wr_busy;
 wire [25:0] ch1_addr;
 wire [15:0] ch1_din;
 wire        ch1_req, ch1_rnw, ch1_ready, ch1_taken;
@@ -236,9 +266,9 @@ vsmile_sdram sdram_glue
     .mem_addr   (mem_addr),
     .mem_ack    (mem_ack),
     .mem_rdata  (mem_rdata),
-    .wr_req     (dl_req),
-    .wr_addr    (dl_waddr),
-    .wr_data    (dl_wdata),
+    .wr_req     (dl_req || clr_req || con_wr),
+    .wr_addr    (dl_req ? dl_waddr : clr_req ? clr_addr : mem_addr),
+    .wr_data    ((dl_req || clr_req) ? (clr_req ? 16'd0 : dl_wdata) : con_wdata),
     .wr_busy    (wr_busy),
     .ch1_addr   (ch1_addr),
     .ch1_din    (ch1_din),
@@ -283,7 +313,7 @@ sdram sdram
 
 // registered: this net fans out to every flop in the design
 reg [1:0] rst_sync = 2'b11;
-always @(posedge clk_sys) rst_sync <= {rst_sync[0], RESET | status[0] | buttons[1] | ~pll_locked | ioctl_download};
+always @(posedge clk_sys) rst_sync <= {rst_sync[0], RESET | status[0] | buttons[1] | ~pll_locked | ioctl_download | clr_active};
 wire reset = rst_sync[1];
 
 // region code on port C (MAME vsmile REGION dip)
@@ -378,13 +408,48 @@ end
 
 reg  [3:0]  joy_s, colors_s, buttons_s;
 reg [7:0] baby_s;
+// Art Studio pen: position in screen pixels (the tablet reports about screen
+// coordinates); the USB mouse moves it a pixel per count (PS/2 dy is
+// positive upwards) and its left button presses it; the left stick moves it
+// too, 1/16 of the deflection per ~60 Hz tick, and pad B presses it
+reg         ms_tog = 0;
+reg  [9:0]  pen_x = 10'd160;
+reg  [7:0]  pen_y = 8'd120;
+reg  [20:0] pen_tick = 0;             // ~60 Hz at 108 MHz
+wire        pen_down = ps2_mouse[0] | joystick_0[4];
+function automatic [10:0] clampadd(input [10:0] v, input signed [12:0] d, input [10:0] hi);
+    logic signed [12:0] t;
+    t = $signed({2'b00, v}) + d;
+    return (t < 0) ? 11'd0 : (t > $signed({2'b00, hi})) ? hi : t[10:0];
+endfunction
+always @(posedge clk_sys) begin
+    logic signed [12:0] dx, dy;
+    ms_tog   <= ps2_mouse[24];
+    pen_tick <= (pen_tick == 21'd1_799_999) ? 21'd0 : pen_tick + 21'd1;
+    dx = 13'sd0; dy = 13'sd0;
+    if (ps2_mouse[24] != ms_tog) begin
+        dx = $signed({{4{ps2_mouse[4]}}, ps2_mouse[15:8]});
+        dy = -$signed({{4{ps2_mouse[5]}}, ps2_mouse[23:16]});
+    end else if (pen_tick == 21'd0) begin
+        dx = $signed({{5{ax[7]}}, ax}) >>> 4;
+        dy = $signed({{5{ay[7]}}, ay}) >>> 4;
+    end
+    pen_x <= 10'(clampadd({1'd0, pen_x}, dx, 11'd319));
+    pen_y <= 8'(clampadd({3'd0, pen_y}, dy, 11'd239));
+end
 // Port 1: Auto plugs the Smart Keyboard in for a keyboard cart (model from
-// its product number, US otherwise; MAME has no Spanish model)
-wire [2:0] port_sel = status[23:21];  // Auto, Joystick, Keyboard US, FR, DE
+// its product number, US otherwise; MAME has no Spanish model), the Gym Mat
+// for a mat cart and the Art Studio tablet for an Art Studio cart, the
+// joystick otherwise
+wire [2:0] port_sel = status[23:21];  // Auto, Joystick, Keyboard US, FR, DE, Gym Mat, Art Studio
 reg        kbd = 0;
+reg        mat = 0;
+reg        pen = 0;
 reg  [7:0] kb_layout = 8'h40;
 always @(posedge clk_sys) begin
-    kbd       <= (port_sel == 3'd0) ? cart_kbd : (port_sel >= 3'd2);
+    kbd       <= (port_sel == 3'd0) ? cart_kbd : (port_sel >= 3'd2 && port_sel <= 3'd4);
+    mat       <= (port_sel == 3'd0) ? (cart_mat && !cart_kbd) : (port_sel == 3'd5);
+    pen       <= (port_sel == 3'd0) ? (cart_art && !cart_kbd && !cart_mat) : (port_sel == 3'd6);
     kb_layout <= (port_sel == 3'd3 || (port_sel == 3'd0 && cart_kbd_fr)) ? 8'h42 :
                  (port_sel == 3'd4 || (port_sel == 3'd0 && cart_kbd_ge)) ? 8'h44 : 8'h40;
 end
@@ -436,12 +501,21 @@ vsmile console
     .mem_ack    (mem_ack),
     .mem_rdata  (mem_rdata),
     .cart_mask  (cart_mask),
+    .cart_ram   (cart_art),
+    .mem_wr     (con_wr),
+    .mem_wdata  (con_wdata),
+    .mem_wbusy  (wr_busy),
 
     .joy        (joy_s),
     .ud_level   (ud_level_s),
     .lr_level   (lr_level_s),
     .colors     (colors_s),
     .buttons    (buttons_s),
+    .mat        (mat),
+    .pen        (pen),
+    .pen_down   (pen_down),
+    .pen_x      (pen_x),
+    .pen_y      (pen_y),
     .kbd        (kbd),
     .kb_keys    (kb_keys),
     .kb_layout  (kb_layout),

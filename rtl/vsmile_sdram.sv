@@ -11,6 +11,10 @@
 // Data comes back in order.  The controller raises ch1_ready one clk before
 // the last word of a burst is in ch1_dout[63:48], so a group is delivered
 // one clk later.
+//
+// Writes (the download, and the console's cart RAM writes, posted) keep
+// their place among the reads: a write waits for the reads queued before
+// it, and reads queued after it wait for the write.
 
 module vsmile_sdram (
     input  logic        clk,
@@ -46,9 +50,9 @@ module vsmile_sdram (
     logic [1:0]  inflight;              // taken by the controller, data not back
     logic        rd_ready_q, wr_pending, wr_want;
     logic [23:0] wr_addr_q;
+    logic [2:0]  wr_bar;                // read queue tail when the write came
     logic [15:0] wr_data_q;
     wire  rd_queued = (qi != qt);
-    wire  rd_any    = (qh != qt);
 
     always_ff @(posedge clk) begin
         logic issue, done;
@@ -73,15 +77,16 @@ module vsmile_sdram (
                 wr_want   <= 1'b1;
                 wr_addr_q <= wr_addr;
                 wr_data_q <= wr_data;
+                wr_bar    <= qt;
             end
-            if (wr_want && !wr_pending && !rd_any && !handed) begin
+            if (wr_want && !wr_pending && qh == wr_bar && !handed) begin
                 ch1_addr   <= {2'b00, wr_addr_q};
                 ch1_din    <= wr_data_q;
                 ch1_rnw    <= 1'b0;
                 ch1_req    <= 1'b1;
                 wr_pending <= 1'b1;
                 wr_want    <= wr_req;       // (a new one arriving now waits)
-            end else if (rd_queued && !handed && inflight != 2'd2 && !wr_pending && !wr_want) begin
+            end else if (rd_queued && !handed && inflight != 2'd2 && !wr_pending && (!wr_want || qi != wr_bar)) begin
                 ch1_addr <= {2'b00, q[qi[1:0]][23:2], 2'b00};
                 ch1_rnw  <= 1'b1;
                 ch1_req  <= 1'b1;

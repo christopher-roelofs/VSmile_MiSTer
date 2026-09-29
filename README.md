@@ -126,8 +126,13 @@ in MAME's `vsmile_cart` list).  Console Auto picks the system per cart:
 V.Smile Baby (reset vector below 0x8000), V.Smile Motion (its "V.Smile\084"
 product record, with boot2.rom present), otherwise V.Smile.  Port 1 Auto plugs in the Smart
 Keyboard for the four keyboard carts (a key table only they carry; model US,
-or French/German by product number 80-091445/80-091444), otherwise the
-joystick.  Both can be forced in the OSD.  Options: TV mode (NTSC/PAL), region (sets the
+or French/German by product number 80-091445/80-091444), the Gym Mat for
+the four mat carts (80-09132x) and the Art Studio tablet for the Art Studio
+carts (80-0670xx, which also get their 2 MB cart RAM), otherwise the
+joystick.  Both can be forced in the OSD.  The mat's squares are on the pad
+as the joystick's buttons (arrows the d-pad, centre ABC/Start); the tablet's
+pen follows a USB mouse (left button presses) or the left stick (B presses).
+See docs/art_studio.md.  Options: TV mode (NTSC/PAL), region (sets the
 language the system ROM and games use), VTech intro on/off.  Controls:
 d-pad, Green/Blue/Yellow/Red, OK/Quit/Help/ABC on joystick 1 (a V.Smile
 joystick has exactly these).
