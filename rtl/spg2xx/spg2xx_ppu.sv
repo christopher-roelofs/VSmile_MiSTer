@@ -30,6 +30,7 @@ module spg2xx_ppu (
     input  logic [15:0] regs [0:255],   // video registers (spg2xx_vctl)
     input  logic        line_start,     // a new scanline begins
     input  logic [8:0]  line_vpos,      // ... this one
+    input  logic        vcmp_wr,        // a video register 0x1C-0x1E write (vertical compression)
     input  logic        last_line,      // ... and it is the frame's last
 
     // system bus reads; a group read (external memory only) returns the
@@ -127,6 +128,71 @@ module spg2xx_ppu (
     rstate_t rs /* verilator public_flat_rd */, ret;   // ret: state to resume after a strip
 
     logic [7:0]  y /* verilator public_flat_rd */;     // scanline being rendered
+
+    // ---- vertical compression (MAME spg_renderer update_vcmp_table) ----
+    // A page with ctrl bit 6 draws line ycmp[y] of its tilemap, or nothing
+    // for a "skip" entry.  MAME rebuilds its table on every write to video
+    // registers 0x1C (increment), 0x1D (first line) and 0x1E (increment
+    // step), and fills it with "skip" at reset; entries whose line would be
+    // outside 0-255 keep their old value.  The engine below rebuilds the same
+    // way, one entry (and one step of its inner loop) per clk, restarting on
+    // a new write; lines 256-479 of MAME's table are not reachable here (y
+    // is 8 bits).
+    logic [8:0]  ycmp [0:255] /* verilator public_flat_rd */;   // {skip, line}
+    logic [8:0]  ycmp_q;                // ycmp[y], a clk behind (read long before R_PAGE)
+    always_ff @(posedge clk) ycmp_q <= ycmp[y];
+    typedef enum logic [1:0] { V_IDLE, V_CLR, V_ENTRY, V_STEP } vstate_t;
+    vstate_t      vs /* verilator public_flat_rd */;
+    logic [8:0]   vi;                   // entry
+    logic signed [31:0] v_counter, v_inc, v_cur;
+    always_ff @(posedge clk) begin
+        if (reset) begin
+            vs <= V_CLR;
+            vi <= 9'd0;
+        end else if (vcmp_wr) begin
+            // rebuild from entry 0 with the registers as written (they are
+            // latched by the next clk, when V_ENTRY starts reading them)
+            vs <= V_ENTRY;
+            vi <= 9'd0;
+            v_counter <= 32'sd0;
+            v_cur     <= 32'sd0;
+            v_inc     <= 32'sd0;
+        end else case (vs)
+            V_CLR: begin
+                ycmp[vi[7:0]] <= 9'h100;
+                vi <= vi + 9'd1;
+                if (vi == 9'd255) vs <= V_IDLE;
+            end
+            V_ENTRY: begin
+                logic signed [31:0] inc, c;
+                // the increment starts as reg 0x1C << 4 at entry 0
+                inc = (vi == 9'd0) ? 32'($signed({16'd0, regs[8'h1c]}) <<< 4) : v_inc;
+                if ({7'd0, vi} < regs[8'h1d][15:0]) begin
+                    if (!vi[8]) ycmp[vi[7:0]] <= 9'h100;
+                    v_inc <= inc;
+                    if (vi == 9'd479) vs <= V_IDLE; else vi <= vi + 9'd1;
+                end else begin
+                    if (!vi[8] && v_cur >= 0 && v_cur < 256) ycmp[vi[7:0]] <= {1'b0, v_cur[7:0]};
+                    c = v_counter + inc;
+                    v_counter <= c;
+                    v_inc     <= inc;
+                    vs        <= V_STEP;
+                end
+            end
+            V_STEP: begin
+                // while (counter >= 0x20 << 4): next line, increment += step
+                if (v_counter >= 32'sd512) begin
+                    v_cur     <= v_cur + 32'sd1;
+                    v_inc     <= v_inc + 32'($signed(regs[8'h1e][7:0]));
+                    v_counter <= v_counter - 32'sd512;
+                end else begin
+                    if (vi == 9'd479) vs <= V_IDLE;
+                    else begin vi <= vi + 9'd1; vs <= V_ENTRY; end
+                end
+            end
+            default: ;
+        endcase
+    end
     logic [1:0]  prio;
     logic [9:0]  cnt /* verilator public_flat_rd */;   // generic counter
     logic [8:0]  n /* verilator public_flat_rd */;     // sprite index / tile column
@@ -358,8 +424,8 @@ module spg2xx_ppu (
                 tw  = 7'd8 << tws;
                 th  = 7'd8 << ths;
                 ncb = {3'(pg_attr[1:0]) + 3'd1, 1'b0};    // 2, 4, 6 or 8 bits per pixel
-                if (!pg_ctrl[3] || pg_attr[13:12] != prio || pg_ctrl[0] || pg_ctrl[6]) begin
-                    // disabled / other priority / linemap / vcmp (unsupported)
+                if (!pg_ctrl[3] || pg_attr[13:12] != prio || pg_ctrl[0] || (pg_ctrl[6] && ycmp_q[8])) begin
+                    // disabled / other priority / linemap / a vcmp "skip" line
                     if (!page) page <= 1'b1;
                     else begin n <= 9'd0; rs <= R_SPR; end
                 end else begin
@@ -370,7 +436,9 @@ module spg2xx_ppu (
                     // tile sizes are powers of two: the multiplies are shifts
                     s_bpr  <= 6'((12'(ncb) << ({1'b0, tws} + 3'd3)) >> 4);
                     s_wpt  <= 12'(((12'(ncb) << ({1'b0, tws} + 3'd3)) >> 4) << ({1'b0, ths} + 3'd3));
-                    by = 9'(8'(y + pg_yscroll[7:0]));
+                    // (vertical compression: the table's line, for the row
+                    // and the row scroll alike, as MAME's logical_scanline)
+                    by = 9'(8'((pg_ctrl[6] ? ycmp_q[7:0] : y) + pg_yscroll[7:0]));
                     bitmap_y      <= by[7:0];
                     tile_scanline <= by[7:0] & (th[5:0] - 6'd1);
                     xscroll_full  <= pg_xscroll;

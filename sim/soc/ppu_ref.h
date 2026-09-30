@@ -13,6 +13,26 @@
 struct PpuRef {
     std::function<uint16_t(uint32_t)> read;     // 22-bit word address
     const uint16_t* regs;                       // video registers 0x2800..
+
+    // vertical compression: MAME's m_ycmp_table, "skip" (0xffffffff) at
+    // reset, rebuilt by update_vcmp() on every write to registers 0x1C-0x1E
+    uint32_t ycmp[480];
+    PpuRef() { for (auto& e : ycmp) e = 0xffffffff; }
+    void update_vcmp() {                        // MAME update_vcmp_table
+        int currentline = 0;
+        int step = regs[0x1e] & 0xff;
+        if (step & 0x80) step -= 0x100;
+        int current_inc_value = regs[0x1c] << 4;
+        int counter = 0;
+        for (int i = 0; i < 480; i++) {
+            if (i < regs[0x1d]) ycmp[i] = 0xffffffff;
+            else {
+                if (currentline >= 0 && currentline < 256) ycmp[i] = currentline;
+                counter += current_inc_value;
+                while (counter >= (0x20 << 4)) { currentline++; current_inc_value += step; counter -= (0x20 << 4); }
+            }
+        }
+    }
     const uint16_t* vram;                       // 0x2800.. (palette at 0x300, sprites 0x400)
     uint16_t linebuf[320];
     bool dbg = false;
@@ -63,14 +83,18 @@ struct PpuRef {
         if (!(ctrl & 0x0008)) return;
         if (((attr & 0x3000) >> 12) != (uint32_t)priority) return;
         if (ctrl & 0x0001) return;      // linemap: not implemented in RTL
-        if (ctrl & 0x0040) return;      // vcmp: not implemented in RTL
+        uint32_t logical = scanline;
+        if (ctrl & 0x0040) {            // vertical compression
+            logical = ycmp[scanline];
+            if (logical == 0xffffffff) return;
+        }
         const uint32_t gfxaddr = gfxseg * 0x40;
         const uint32_t xscroll = scrollregs[0], yscroll = scrollregs[1];
         const uint32_t tilemap_rambase = tilemapregs[2], exattr_rambase = tilemapregs[3];
         const int tile_width = (attr & 0x0030) >> 4;
         const uint32_t tile_h = 8 << ((attr & 0x00c0) >> 6), tile_w = 8 << tile_width;
         const uint32_t tile_count_x = 512 / tile_w;
-        const uint32_t bitmap_y = (scanline + yscroll) & 0xff;
+        const uint32_t bitmap_y = (logical + yscroll) & 0xff;
         const uint32_t y0 = bitmap_y / tile_h, tile_scanline = bitmap_y % tile_h;
         const uint32_t nc_bpp = ((attr & 3) + 1) << 1;
         const uint32_t bits_per_row = nc_bpp * tile_w / 16;
@@ -78,7 +102,7 @@ struct PpuRef {
         static const uint8_t s_blend[4] = {0x08, 0x10, 0x18, 0x20};
         const uint8_t blendlevel = s_blend[regs[0x2a] & 3];
         int realxscroll = xscroll;
-        if (ctrl & 0x0010) realxscroll += (int16_t)vram[0x100 + ((scanline + yscroll) & 0xff)];
+        if (ctrl & 0x0010) realxscroll += (int16_t)vram[0x100 + ((logical + yscroll) & 0xff)];
         const int upperscrollbits = realxscroll >> (tile_width + 3);
         const int endpos = (320 + tile_w) / tile_w;
         for (int x0 = 0; x0 < endpos; x0++) {

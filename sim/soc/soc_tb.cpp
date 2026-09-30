@@ -447,6 +447,15 @@ int main(int argc, char** argv) {
         top->clk = 0;
         top->eval();
 
+        // vertical compression: the reference rebuilds its table after each
+        // write to video registers 0x1C-0x1E (MAME does it in the write), a
+        // clk later when the register array holds the new value
+        {
+            static bool vcmp_pend = false;
+            if (vcmp_pend) { ref.update_vcmp(); vcmp_pend = false; }
+            if (top->dbg_io_wr && top->dbg_io_addr >= 0x281c && top->dbg_io_addr <= 0x281e) vcmp_pend = true;
+        }
+
 #ifndef HW_TOP
         // external memory: reads are issued as one-clk pulses and answered
         // in order.  MEMLAT: clks from issue to data (default 0: the next

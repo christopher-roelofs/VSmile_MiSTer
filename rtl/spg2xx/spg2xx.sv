@@ -169,6 +169,7 @@ module spg2xx (
     spg2xx_ppu ppu (
         .clk, .reset, .clk_vid, .spg28x,
         .regs(vregs), .line_start, .line_vpos(vpos), .last_line,
+        .vcmp_wr(vc_wr && reg_off >= 8'h1c && reg_off <= 8'h1e),
         .mem_req(ppu_mem_req), .mem_group(ppu_mem_group), .mem_more(ppu_mem_more), .mem_addr(ppu_mem_addr), .mem_ack(ppu_mem_ack),
         .mem_rdata(ppu_mem_rdata), .mem_rdata64(ppu_mem_rdata64),
         .vram_addr(ppu_vram_addr), .vram_q(ppu_vram_q),
