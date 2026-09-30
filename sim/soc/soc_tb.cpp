@@ -267,7 +267,7 @@ int main(int argc, char** argv) {
             KbEv e; double t;
             int k = sscanf(line, "%u %d %d %d %lf", &e.frame, &e.row, &e.col, &e.down, &t);
             if (k < 4) continue;
-            if (k == 5) { e.clk = (uint64_t)(t * 108e6); kb_timed.push_back(e); }
+            if (k == 5) { e.clk = (uint64_t)(t * 27e6 * (getenv("CE_DIV") ? atoi(getenv("CE_DIV")) : 4)); kb_timed.push_back(e); }
             else kb_events.push_back(e);
         }
         if (f) fclose(f);
@@ -436,8 +436,10 @@ int main(int argc, char** argv) {
 
     bool done = false;
     while (n < max_insns && !done) {
-        // clk = 108 MHz, ce = 27 MHz, clk_vid = 54 MHz (toggles every clk)
-        const bool ce = (clk_n & 3) == 3;
+        // clk = 108 MHz, ce = 27 MHz, clk_vid = 54 MHz (toggles every clk);
+        // CE_DIV=n: n clks per ce instead of 4 (headroom test: clk = n * 27 MHz)
+        static const int ce_div = getenv("CE_DIV") ? atoi(getenv("CE_DIV")) : 4;
+        const bool ce = (clk_n % ce_div) == (uint64_t)(ce_div - 1);
         top->ce = ce;
         top->clk_vid = clk_n & 1;
         if (clk_n == 16) top->reset = 0;
@@ -783,14 +785,14 @@ int main(int argc, char** argv) {
             prev_op = top->dbg_op; prev_pc = top->dbg_pc;
             n++;
             if ((n & 0x3fffff) == 0) {
-                printf("  %llu instructions (%.2f s emulated)\n", (unsigned long long)n, clk_n / 108e6);
+                printf("  %llu instructions (%.2f s emulated)\n", (unsigned long long)n, clk_n / (27e6 * (getenv("CE_DIV") ? atoi(getenv("CE_DIV")) : 4)));
                 fflush(stdout);
             }
         }
     }
 
     printf("\n%s: %llu instructions, %.3f s emulated\n", freerun ? "FREERUN" : "LOCKSTEP",
-           (unsigned long long)n, clk_n / 108e6);
+           (unsigned long long)n, clk_n / (27e6 * (getenv("CE_DIV") ? atoi(getenv("CE_DIV")) : 4)));
     if (freerun)
         printf("trace %s\n", trace_ok ? "matched until its end" : "diverged (see above)");
     printf("video: %u frames, %llu/%llu lines differ from the reference renderer (%llu more matched the end-of-line state, %llu had palette and %llu other memory writes mid-line), %llu overruns\n",

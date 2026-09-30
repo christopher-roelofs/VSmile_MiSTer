@@ -55,9 +55,15 @@ dispatched on the high nibble:
   at cart load instead of the clear, with the console held in reset.  "Save
   Backup RAM" writes it back, as does opening the OSD after the program
   wrote its RAM when Autosave is on.  The file is the 2 MB of words,
-  little-endian, 4096 blocks, moved a 512-byte block at a time through a
-  buffer (`rtl/vsmile_save.sv`); saving reads SDRAM through the glue's
-  second read client while the console runs.  Screenshots (Win+PrtScr,
+  little-endian, moved in 16 KB chunks (32 sectors per HPS request; the
+  request round trip is what costs) through a buffer (`rtl/vsmile_save.sv`);
+  only chunks the console wrote since the last save are saved, except that
+  a file shorter than 2 MB is first written whole.  Saving reads SDRAM
+  through the glue's second read client while the console runs.  MiSTer
+  serves the request only once the OSD is closed.
+* This is the cart's storage, not a save state: loading it restarts the
+  cart (as a real cart does when plugged back in) with what the program
+  stored, e.g. its saved pictures.  Screenshots (Win+PrtScr,
   `screenshots/VSmile/*.png`) are MiSTer's own and manual.
 
 MiSTer: Port 1 "Art Studio" (Auto for product numbers 80-0670xx, which also

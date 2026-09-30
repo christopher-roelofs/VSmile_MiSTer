@@ -182,7 +182,37 @@ module spg2xx_ppu (
 
     // row buffer (pixel words of the strip's row)
     logic [15:0] rowbuf [0:31];
+    // group fill of the row buffer, one clk ahead: slot j takes word
+    // rb_sel_q[j] of the group when rb_we_q[j].  rb_i, rb_n and mem_addr
+    // settle at least two clks before the group arrives (the SoC's cache
+    // lookup alone takes that), so these are current when used (timing:
+    // keeps the index arithmetic and decode off the write)
+    logic [31:0] rb_we_q;
+    logic [1:0]  rb_sel_q [0:31];
     logic [5:0]  rb_n /* verilator public_flat_rd */, rb_i;
+    always_ff @(posedge clk)
+        for (int j = 0; j < 32; j++) begin
+            logic [4:0] d;                  // slot offset from rb_i
+            d = 5'(j) - rb_i[4:0];
+            rb_we_q[j]  <= ({1'b0, d} < 6'd4 - 6'(mem_addr[1:0])) && (rb_i + {1'b0, d} < rb_n);
+            rb_sel_q[j] <= d[1:0] + mem_addr[1:0];
+        end
+`ifdef VERILATOR
+    // the direct form, checked where the registered one is used
+    always_ff @(posedge clk)
+        if (rs == R_FETCH && mem_ack && mem_group) begin
+            logic [31:0] we; logic [1:0] sel [0:31];
+            we = '0;
+            for (int j = 0; j < 32; j++) sel[j] = 2'd0;
+            for (int k = 0; k < 4; k++)
+                if (k >= int'(mem_addr[1:0]) && rb_i + 6'(k) - 6'(mem_addr[1:0]) < rb_n) begin
+                    we[rb_i[4:0] + 5'(k) - 5'(mem_addr[1:0])] = 1'b1;
+                    sel[rb_i[4:0] + 5'(k) - 5'(mem_addr[1:0])] = 2'(k);
+                end
+            for (int j = 0; j < 32; j++)
+                if (we[j] != rb_we_q[j] || (we[j] && sel[j] != rb_sel_q[j])) $display("PPU ROWBUF WE MISMATCH slot %0d", j);
+        end
+`endif
 
     // bitstream
     logic [23:0] bits;
@@ -525,9 +555,8 @@ module spg2xx_ppu (
                     logic [1:0] first;      // first word of the group belonging to the row
                     first = mem_addr[1:0];
                     got = 6'd4 - 6'(first);
-                    for (int k = 0; k < 4; k++)
-                        if (k >= int'(first) && rb_i + 6'(k) - 6'(first) < rb_n)
-                            rowbuf[rb_i[4:0] + 5'(k) - 5'(first)] <= mem_rdata64[k * 16 +: 16];
+                    for (int j = 0; j < 32; j++)
+                        if (rb_we_q[j]) rowbuf[j] <= mem_rdata64[rb_sel_q[j] * 16 +: 16];
                     nxt = {mem_addr[21:2] + 20'd1, 2'b00};
                 end else begin
                     rowbuf[rb_i[4:0]] <= mem_rdata;

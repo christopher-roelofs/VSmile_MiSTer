@@ -219,9 +219,13 @@ module spg2xx_spu (
     wire [15:0] pa_pwd = cpu_preg_value(s1_addr[8:0], s1_wdata);
 
     always_ff @(posedge clk) begin   // request stage
+        // the latch loads on every clk no request is held (req comes only
+        // then: `idle` needs !s1_v), so the bus unit's decode behind `req`
+        // stays off its enable (timing); s1_v marks the loaded value valid
+        if (!s1_v) begin s1_addr <= addr; s1_we <= we; s1_wdata <= wdata; end
         if (reset) s1_v <= 1'b0;
         else begin
-            if (req) begin s1_v <= 1'b1; s1_addr <= addr; s1_we <= we; s1_wdata <= wdata; end
+            if (req) s1_v <= 1'b1;
             else if (pa_go) s1_v <= 1'b0;
         end
     end
@@ -281,6 +285,29 @@ module spg2xx_spu (
     // x[X_FIQ_ST] != 0, kept as its own register (updated where the status
     // is written, in the same order) so the CPU's interrupt check does not
     // start from a 16-bit OR (timing)
+    // shift[ch] one clk ahead: E_FETCH2 is never the clk after `ch` changes
+    // or after its own shift write (E_FETCH and a read state come between),
+    // so this is current there; keeps the 16-way lookup off the address
+    // advance (timing)
+    logic [3:0] shift_r;
+    always_ff @(posedge clk) shift_r <= shift[ch];
+`ifdef VERILATOR
+    always_ff @(posedge clk)
+        if (!reset && es == E_FETCH2 && shift_r != shift[ch]) $display("SPU SHIFT_R MISMATCH ch=%0d", ch);
+`endif
+    // one-hot copy of ch, a clk behind: its users (eng_stop, the FIQ status
+    // set) run several states after ch changes
+    logic [15:0] ch_oh;
+    always_ff @(posedge clk) ch_oh <= 16'(1) << ch;
+`ifdef VERILATOR
+    always_ff @(posedge clk)
+        if (!reset && ch_oh != (16'(1) << ch) && (es == E_FETCH || es == E_FETCH2 || es == E_ENV || es == E_ENV2))
+            $display("SPU CH_OH MISMATCH ch=%0d", ch);
+`endif
+    // E_ENV's inputs, registered in E_MIX3B
+    logic        ev_ramp_on, ev_env_man, ev_f_zero, ev_ne_zero;
+    logic [16:0] ev_f, ev_reload;
+    logic [6:0]  ev_ne;
     logic fiq_nz;
     assign fiq = fiq_nz;
 `ifdef VERILATOR
@@ -292,12 +319,17 @@ module spg2xx_spu (
     // Sample processing helpers (operate on the working copy)
     // ------------------------------------------------------------------
     // stop_channel's effect on the engine-held state
+    // (the engine's channel, one-hot through ch_oh: the control-register
+    // bits are written through a registered decode, timing)
     task automatic eng_stop(input logic [3:0] c, input logic set_stop_bit);
-        x[X_STATUS][c]   <= 1'b0;
-        x[X_TONE_REL][c] <= 1'b0;
-        x[X_RAMPDOWN][c] <= 1'b0;
-        if (set_stop_bit) x[X_STOP][c] <= 1'b1;
-        fiq_timer_on[c]  <= 1'b0;
+        for (int i = 0; i < 16; i++)
+            if (ch_oh[i]) begin
+                x[X_STATUS][i]   <= 1'b0;
+                x[X_TONE_REL][i] <= 1'b0;
+                x[X_RAMPDOWN][i] <= 1'b0;
+                if (set_stop_bit) x[X_STOP][i] <= 1'b1;
+                fiq_timer_on[i]  <= 1'b0;
+            end
     endtask
 
     always_ff @(posedge clk) begin
@@ -448,7 +480,10 @@ module spg2xx_spu (
 
             E_FETCH: begin  // MAME fetch_sample, part 1
                 w[C_WDATA_PREV] <= w[C_WDATA];
-                if (fiq_timer_on[ch]) begin x[X_FIQ_ST][ch] <= 1'b1; fiq_nz <= 1'b1; end
+                if (fiq_timer_on[ch]) begin
+                    for (int i = 0; i < 16; i++) if (ch_oh[i]) x[X_FIQ_ST][i] <= 1'b1;
+                    fiq_nz <= 1'b1;
+                end
                 if (hdr_need) begin
                     mem_req  <= 1'b1;
                     mem_addr <= w_waddr;
@@ -523,7 +558,7 @@ module spg2xx_spu (
                     logic [4:0]  sh;
                     logic [15:0] m;
                     a  = do_loop ? w_laddr : w_waddr;
-                    sh = do_loop ? 5'd0 : {1'b0, shift[ch]};
+                    sh = do_loop ? 5'd0 : {1'b0, shift_r};
                     m  = w[C_MODE];
                     if (clr_adpcm) m[15] = 1'b0;
                     // advance (uses the mode after a loop cleared ADPCM)
@@ -638,6 +673,22 @@ module spg2xx_spu (
             E_MIX3B: begin  // accumulate
                 mix_l <= mix_l + (mp >>> 14);
                 mix_r <= mix_r + (mq >>> 14);
+                // E_ENV's decisions, a state ahead (its inputs do not change
+                // here; E_ENV is only entered from here): timing
+                begin
+                    logic [16:0] f;
+                    logic [7:0]  ne;
+                    f  = (ramp_r > 0) ? ramp_r - 17'd1 : 17'd0;
+                    ne = {1'b0, w_edd} - {1'b0, w[C_ELOOP][15:9]};
+                    if (ne > {1'b0, w_edd}) ne = 0;
+                    ev_ramp_on  <= x[X_RAMPDOWN][ch] && !(spg28x && x[X_ENV_MODE][ch]);
+                    ev_env_man  <= x[X_ENV_MODE][ch];
+                    ev_f        <= f;
+                    ev_f_zero   <= (f == 0);
+                    ev_ne       <= ne[6:0];
+                    ev_ne_zero  <= (ne == 0);
+                    ev_reload   <= ramp_count(w_ramp_clk[2:0]);
+                end
                 es <= E_ENV;
             end
 
@@ -651,24 +702,19 @@ module spg2xx_spu (
                 // working; its notes say the voices play fine without
                 // ramp-down).  The standard V.Smile keeps MAME's behaviour,
                 // which its carts use to cut manual-envelope music notes.
-                if (x[X_RAMPDOWN][ch] && !(spg28x && x[X_ENV_MODE][ch])) begin
-                    logic [16:0] f;
-                    f = (ramp_r > 0) ? ramp_r - 17'd1 : 17'd0;
-                    ramp_frame[ch] <= f;
-                    if (f == 0) begin      // audio_rampdown_tick
-                        logic [7:0] ne;
-                        ne = {1'b0, w_edd} - {1'b0, w[C_ELOOP][15:9]};
-                        if (ne > {1'b0, w_edd}) ne = 0;
-                        if (ne != 0) begin
-                            w[C_ENV_DATA][6:0] <= ne[6:0];
-                            ramp_frame[ch] <= ramp_count(w_ramp_clk[2:0]);
+                if (ev_ramp_on) begin
+                    ramp_frame[ch] <= ev_f;
+                    if (ev_f_zero) begin   // audio_rampdown_tick
+                        if (!ev_ne_zero) begin
+                            w[C_ENV_DATA][6:0] <= ev_ne;
+                            ramp_frame[ch] <= ev_reload;
                         end else begin
                             eng_stop(ch, 1'b1);
                             w[C_MODE][15] <= 1'b0;
                         end
                     end
                     es <= E_WB;
-                end else if (!x[X_ENV_MODE][ch]) begin
+                end else if (!ev_env_man) begin
                     envclk_frame[ch] <= envclk_last ? envclk_reload_r : envclk_r - 27'd1;
                     es <= envclk_last ? E_ENV2 : E_WB;
                 end else

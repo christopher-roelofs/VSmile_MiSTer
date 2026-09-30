@@ -61,6 +61,11 @@ localparam CONF_STR = {
     "R0,Reset;",
     "J1,Green,Blue,Yellow,Red,OK/Orange,Quit/Exit,Help/Cloud,ABC/Ball;",
     "jn,B,X,Y,L,A,Select,R,Start;",
+    "I,",
+    "Saving backup RAM...,",
+    "Backup RAM saved,",
+    "Loading backup RAM...,",
+    "Backup RAM loaded;",
     "V,v0.1.",`BUILD_DATE
 };
 
@@ -83,7 +88,10 @@ pll pll
 // 27 MHz console tick
 reg [1:0] ce_div = 0;
 always @(posedge clk_sys) ce_div <= ce_div + 2'd1;
-wire ce_27 = (ce_div == 2'd3);
+// registered (high while ce_div == 3, as the decode was): one flop that
+// fans out, not a decode of the counter (timing)
+reg  ce_27 = 0;
+always @(posedge clk_sys) ce_27 <= (ce_div == 2'd2);
 
 ///////////////////////////////////////////////////////////////////////
 // HPS
@@ -107,6 +115,9 @@ reg         ioctl_wait;
 wire        img_mounted, img_readonly, sd_ack, sd_buff_wr;
 wire [63:0] img_size;
 wire [31:0] sd_lba;
+wire [5:0]  sd_blk_cnt;
+reg         info_req = 0;               // corner messages (the "I," list)
+reg  [7:0]  info;
 wire        sd_rd, sd_wr;
 wire [13:0] sd_buff_addr;
 wire [7:0]  sd_buff_dout, sd_buff_din;
@@ -133,11 +144,14 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
     .ioctl_wait      (ioctl_wait),
     .ioctl_index     (ioctl_index),
 
+    .info_req        (info_req),
+    .info            (info),
+
     .img_mounted     (img_mounted),
     .img_readonly    (img_readonly),
     .img_size        (img_size),
     .sd_lba          ('{sd_lba}),
-    .sd_blk_cnt      ('{6'd0}),
+    .sd_blk_cnt      ('{sd_blk_cnt}),
     .sd_rd           (sd_rd),
     .sd_wr           (sd_wr),
     .sd_ack          (sd_ack),
@@ -154,14 +168,16 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 // first, for both the cartridge and the system ROM (MAME's ROM_REVERSE on
 // the sysrom cancels against the CPU's big-endian region: the CPU sees the
 // dump's bytes low first, as verified against a trace that reads it).
-// Index (bootN.rom auto-loads as N * 64): system ROM 0 (boot0.rom), V.Smile
-// Motion system ROM 0x80 (boot2.rom), cartridge 0x40 (boot1.rom) or 1 (OSD).
-// Console Auto picks the system per cart, so the system ROMs are only loaded
-// from the boot files, when the core starts.  Word addresses: cart 0x000000, system ROM
+// Index (MiSTer loads bootN.rom from games/VSmile when the core starts, as
+// N * 64; boot.rom for 0): V.Smile system ROM 0 (boot0.rom / boot.rom), V.Smile
+// Motion system ROM 0x40 (boot1.rom); cartridges only from the OSD (index 1),
+// none starts on its own.  Other indexes (boot2/3.rom) are ignored.  Console
+// Auto picks the system per cart.  Word addresses: cart 0x000000, system ROM
 // 0x800000, Motion system ROM 0x900000.
 
-wire        dl_is_motion = (ioctl_index == 8'h80);
+wire        dl_is_motion = (ioctl_index == 8'h40);
 wire        dl_is_bios   = (ioctl_index == 0) || dl_is_motion;
+wire        dl_is_cart   = (ioctl_index == 8'h01);
 // Console: Auto picks the V.Smile Motion for a Motion cart when its system
 // ROM is loaded.  Motion carts carry VTech's PC-software record
 // "V.Smile\084nnn ...\Info.XML" (product numbers 80-084xxx), one character
@@ -191,8 +207,8 @@ reg         has_bios_std = 0, has_bios_motion = 0;
 // Cart content markers, scanned while the cart downloads (16-bit characters)
 reg  dl_q;
 always @(posedge clk_sys) dl_q <= ioctl_download;
-wire dl_start = ioctl_download && !dl_q && !dl_is_bios;
-wire dl_cwr   = ioctl_download && ioctl_wr && !dl_is_bios;
+wire dl_start = ioctl_download && !dl_q && dl_is_cart;
+wire dl_cwr   = ioctl_download && ioctl_wr && dl_is_cart;
 dl_match #(.N(11), .PAT("V.Smile\\084")) m_motion (clk_sys, dl_start, dl_cwr, ioctl_dout, cart_motion);
 // Smart Keyboard carts (US Smart Keyboard, German Smart Key 80-091444,
 // French Tip Tap 80-091445, Spanish Teclado 80-091447): a key table found in
@@ -233,7 +249,8 @@ reg         clr_dl_q = 0;
 // instead of the clear.  Saved with "Save Backup RAM", or on opening the OSD
 // after the cart RAM was written when Autosave is on (as the Game Boy core).
 reg         bk_ena = 0, sav_pending = 0, bk_new_load = 0;
-wire        cart_dl = ioctl_download && !dl_is_bios;
+reg         sav_full = 0;               // the mounted file is the full 2 MB
+wire        cart_dl = ioctl_download && dl_is_cart;
 wire        sv_busy, sv_loading, sv_rd_req, sv_rd_take, sv_rd_ack, sv_wr_req;
 wire [23:0] sv_rd_addr, sv_wr_addr;
 wire [15:0] sv_wr_data;
@@ -242,11 +259,28 @@ wire        bk_load = status[25] || bk_new_load;
 wire        bk_save = status[26] || (sav_pending && OSD_STATUS && status[24]);
 always @(posedge clk_sys) begin
     if (cart_dl && !clr_dl_q) bk_ena <= 1'b0;
-    if (cart_dl && img_mounted && !img_readonly) bk_ena <= 1'b1;
+    if (cart_dl && img_mounted && !img_readonly) begin
+        bk_ena   <= 1'b1;
+        sav_full <= (img_size == 64'h200000);
+    end
     if (con_wr && !OSD_STATUS) sav_pending <= 1'b1;
     else if (sv_busy && !sv_loading) sav_pending <= 1'b0;
     old_bk_load <= bk_load;
     old_bk_save <= bk_save;
+end
+// messages in the corner (the "I," list), as the Game Boy core's
+reg         sv_busy_q = 0, sv_was_load = 0;
+always @(posedge clk_sys) begin
+    sv_busy_q <= sv_busy;
+    info_req  <= 1'b0;
+    if (sv_busy && !sv_busy_q) begin
+        sv_was_load <= sv_loading;
+        info        <= sv_loading ? 8'd3 : 8'd1;
+        info_req    <= 1'b1;
+    end else if (!sv_busy && sv_busy_q) begin
+        info     <= sv_was_load ? 8'd4 : 8'd2;
+        info_req <= 1'b1;
+    end
 end
 vsmile_save save_ram
 (
@@ -254,13 +288,18 @@ vsmile_save save_ram
     .reset        (~pll_locked),
     .load         (cart_art && bk_ena && bk_load && !old_bk_load && !sv_busy),
     .save         (cart_art && bk_ena && bk_save && !old_bk_save && !sv_busy && !clr_active),
+    .file_full    (sav_full),
+    .new_cart     (cart_dl && !clr_dl_q),
+    .mark         (con_wr),
+    .mark_addr    (mem_addr),
     .busy         (sv_busy),
     .loading      (sv_loading),
     .sd_lba       (sd_lba),
+    .sd_blk_cnt   (sd_blk_cnt),
     .sd_rd        (sd_rd),
     .sd_wr        (sd_wr),
     .sd_ack       (sd_ack),
-    .sd_buff_addr (sd_buff_addr[8:0]),
+    .sd_buff_addr (sd_buff_addr),
     .sd_buff_dout (sd_buff_dout),
     .sd_buff_din  (sd_buff_din),
     .sd_buff_wr   (sd_buff_wr),
@@ -276,12 +315,12 @@ vsmile_save save_ram
 );
 
 always @(posedge clk_sys) begin
-    clr_dl_q    <= ioctl_download && !dl_is_bios;
+    clr_dl_q    <= ioctl_download && dl_is_cart;
     clr_req     <= 1'b0;
     bk_new_load <= 1'b0;
-    if (clr_dl_q && !(ioctl_download && !dl_is_bios) && cart_art && bk_ena && |img_size) begin
+    if (clr_dl_q && !(ioctl_download && dl_is_cart) && cart_art && bk_ena && |img_size) begin
         bk_new_load <= 1'b1;
-    end else if (clr_dl_q && !(ioctl_download && !dl_is_bios) && cart_art) begin
+    end else if (clr_dl_q && !(ioctl_download && dl_is_cart) && cart_art) begin
         clr_active <= 1'b1;
         clr_addr   <= 24'hC00000;
     end else if (clr_active && !clr_req && !wr_busy) begin
@@ -293,7 +332,7 @@ end
 
 always @(posedge clk_sys) begin
     dl_req <= 0;
-    if (ioctl_download && ioctl_wr) begin
+    if (ioctl_download && ioctl_wr && (dl_is_bios || dl_is_cart)) begin
         if (!ioctl_addr[0]) dl_lo <= ioctl_dout;
         else begin
             dl_waddr   <= dl_is_bios ? {3'b100, dl_is_motion, ioctl_addr[20:1]} : {1'b0, ioctl_addr[23:1]};
@@ -308,7 +347,7 @@ always @(posedge clk_sys) begin
     if (ioctl_download) begin
         if (dl_is_motion) has_bios_motion <= 1;
         else if (dl_is_bios) has_bios_std <= 1;
-        else cart_bytes <= ioctl_addr + 1'd1;
+        else if (dl_is_cart) cart_bytes <= ioctl_addr + 1'd1;
     end
 end
 

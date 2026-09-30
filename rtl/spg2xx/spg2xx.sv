@@ -319,15 +319,18 @@ module spg2xx (
     assign vc_rd = in_reg && rq_rd && rq_is_vreg;
     assign vc_wr = in_reg && rq_wr && rq_is_vreg;
 
+    logic [1:0] bram_sel;   // 0 ram, 1 vram, 2 audio
     // BRAM ports
     always_ff @(posedge clk) begin
-        if (go && q_wr && is_ram)   ram[q_addr[13:0]]   <= q_wdata;
+        // main RAM writes a clk later, in A_BRAM (where the access completes
+        // anyway), from the request latched in A_IDLE: keeps the arbiter and
+        // address decode off the RAM's write port (timing)
+        if (ast == A_BRAM && rq_wr && bram_sel == 2'd0) ram[rq_addr[13:0]] <= rq_wdata;
         if (go && q_wr && is_vram)  vram[q_addr[10:0]]  <= q_wdata;
         ram_q  <= ram[q_addr[13:0] < 14'h2800 ? q_addr[13:0] : 14'd0];
         vram_q <= vram[q_addr[10:0]];
         ppu_vram_q <= vram[ppu_vram_addr];
     end
-    logic [1:0] bram_sel;   // 0 ram, 1 vram, 2 audio
 
     // register read value (in A_REG)
     logic [15:0] reg_rdata;
