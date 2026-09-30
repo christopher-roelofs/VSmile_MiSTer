@@ -29,6 +29,7 @@ module vsmile (
     input  logic [7:0]  baby_buttons,   // yellow, blue, orange, green, red, cloud, ball, exit
     input  logic [1:0]  baby_mode,      // function switch: Play Time, Watch & Learn, Learn & Explore
     input  logic        dummy_bios,     // no system ROM: veesem's dummy instead of 0xFFFF
+    input  logic        on_button,      // ON button held for 30 frames after reset (see portb_in)
 
     output logic        mem_req,        // one-clk issue pulse (up to four out)
     output logic [23:0] mem_addr,
@@ -168,8 +169,20 @@ module vsmile (
     assign ctrl_rts_evt[1] = 1'b0;
 
     // MAME portb_r: OFF (bit 7) / ON (bit 6) switches released, Restart off
-    // (V.Smile Baby: MAME vsmileb portb_r 0x0080)
-    wire [15:0] portb_in = baby ? 16'h0080 : 16'h00c8;
+    // (V.Smile Baby: MAME vsmileb portb_r 0x0080).  A console is switched
+    // on with the ON button, which is still held when the game first looks:
+    // with on_button, bit 6 reads pressed (low) for the first 30 frames
+    // after reset.  Toy Story 2 (USA) checks it at boot and otherwise powers
+    // itself off (sleep, then its restart path) every 8 frames, as in MAME.
+    logic [4:0] on_frames;
+    logic       vblank_q;
+    always_ff @(posedge clk) begin
+        vblank_q <= vblank;
+        if (reset) on_frames <= 5'd30;
+        else if (vblank && !vblank_q && on_frames != 5'd0) on_frames <= on_frames - 5'd1;
+    end
+    wire on_held = on_button && on_frames != 5'd0;
+    wire [15:0] portb_in = baby ? 16'h0080 : {8'h00, 1'b1, !on_held, 6'b001000};
 
     // MAME vsmilem porta_r; vsmileb porta_r: 0x0302, bit 7 VTech intro
     wire [15:0] porta_in = baby ? {8'h03, region[4], 7'h02} : motion ? 16'hC000 : 16'h0000;

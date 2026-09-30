@@ -13,7 +13,7 @@ run() {
     local c=$1 name d
     name=$(basename "$c" .bin | tr -cd 'A-Za-z0-9()_ -' | tr ' ' '_')
     d="$out/$name"; mkdir -p "$d"
-    FREERUN=1 DUMP="$d" FRAMES=60 timeout 1800 "$here/sim/soc/obj_dir/Vvsmile" "$c" "$tr" "$N" > "$d/log.txt" 2>&1
+    ON_BUTTON=1 FREERUN=1 DUMP="$d" FRAMES=60 timeout 1800 "$here/sim/soc/obj_dir/Vvsmile" "$c" "$tr" "$N" > "$d/log.txt" 2>&1
     python3 - "$d" "$c" <<'P'
 import sys, glob, os
 d, c = sys.argv[1], sys.argv[2]
@@ -31,4 +31,4 @@ print(f"{st} {os.path.basename(c)[:62]:62s} frames={len(fr):3d} lit%={last:3d} {
 P
 }
 export -f run; export here out tr N
-printf '%s\n' "$@" | xargs -P "$(nproc)" -I{} bash -c 'run "$@"' _ {}
+printf '%s\0' "$@" | xargs -0 -P "$(nproc)" -I{} bash -c 'run "$@"' _ {}

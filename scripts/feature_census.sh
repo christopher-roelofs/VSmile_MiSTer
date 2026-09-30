@@ -7,6 +7,7 @@
 #
 #   MAME=<0.289 binary> scripts/feature_census.sh <outdir> [seconds] [cart.bin...]
 #
+# ON_FRAMES=n holds the ON button for the first n frames (census.lua).
 # Default: all of ROMS/*.bin (not ROMS/Baby), 120 s of game time each, one
 # MAME per CPU.  Carts run with the v102 system ROM (some call into it).
 here=$(cd "$(dirname "$0")/.." && pwd)
@@ -31,5 +32,5 @@ run() {
     echo "$(basename "$c")" > "$out/$name.cart"
     echo "done $name ($(grep -c '' "$out/$name.txt" 2>/dev/null) features)"
 }
-export -f run; export out secs rompath here MAME CENSUS_BIOS
+export -f run; export out secs rompath here MAME CENSUS_BIOS ON_FRAMES
 printf '%s\0' "$@" | xargs -0 -P "$(nproc)" -I{} bash -c 'run "$@"' _ {}

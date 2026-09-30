@@ -212,6 +212,11 @@ module spg2xx_spu (
     // for its sample reads.
     wire  eng_idle = es == E_IDLE && pend_start == 0 && pend_stop == 0 && pend_ramp == 0;
     always_ff @(posedge clk) idle <= !s1_v && !ack && !req && !reset && eng_idle && !tick_pending;
+`ifdef VERILATOR
+    // the engine's tick start relies on this (see E_IDLE)
+    always_ff @(posedge clk)
+        if (!reset && req && !idle) $display("SPU req while not idle MISMATCH");
+`endif
     wire  pa_go  = s1_v && eng_idle;
     wire  pa_cwe = pa_go && s1_we && s1_addr[10:9] == 2'b00;
     wire  pa_pwe = pa_go && s1_we && s1_addr[10:9] == 2'b01;
@@ -384,7 +389,10 @@ module spg2xx_spu (
                 if (pend_start != 0 || pend_stop != 0 || pend_ramp != 0) begin
                     ch <= 0;
                     es <= E_CMD;
-                end else if (tick_pending && !req && !s1_v && !ack && !idle) begin
+                // (no !req term: the bus unit raises req only while idle is
+                // set, which already holds a tick back; req comes from its
+                // address mux, too long a path into the engine state)
+                end else if (tick_pending && !s1_v && !ack && !idle) begin
                     tick_pending <= 1'b0;
                     es <= E_TICK;
                 end

@@ -6,6 +6,18 @@ local cpu   = manager.machine.devices[":maincpu"]
 local space = cpu.spaces["program"]
 local out   = io.open(os.getenv("CENSUS_OUT"), "w")
 
+-- ON_FRAMES=n: the console's ON button (port B bit 6, low = pressed) reads
+-- pressed for the first n frames, as when the console is switched on with
+-- it (MAME's portb_r always reports it released)
+local on_frames = tonumber(os.getenv("ON_FRAMES") or "0")
+local on_frame = 0
+if on_frames > 0 then
+    on_tap = space:install_read_tap(0x3d06, 0x3d06, "on_button", function(offset, data, mask)
+        if on_frame < on_frames then return data & 0xffbf end
+    end)
+    emu.register_frame_done(function() on_frame = on_frame + 1 end)
+end
+
 local seen = {}
 local frame = 0
 -- one line per feature: "<feature>\t@<first frame>"

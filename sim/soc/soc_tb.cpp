@@ -221,12 +221,14 @@ int main(int argc, char** argv) {
     top->pal = 0;
     top->mame_timing = 1;
     top->region = 0x1f;                 // English (US), VTech intro on
+    if (getenv("NO_INTRO")) top->region = 0x0f;
     top->has_bios = bios.empty() ? 0 : 1;
     // MOTION=1: V.Smile Motion (its system ROM in BIOS=, port A reads 0xC000)
     top->motion = getenv("MOTION") ? 1 : 0;
     // DUMMY_BIOS=1: without BIOS=, the system ROM area reads as veesem's dummy
     // (as on the MiSTer) instead of 0xFFFF (as in the MAME traces)
     top->dummy_bios = getenv("DUMMY_BIOS") ? 1 : 0;
+    top->on_button = getenv("ON_BUTTON") ? 1 : 0;   // off: MAME traces have it released
     // BABY=1: V.Smile Baby (SPG28x, built-in buttons; system ROM in BIOS=);
     // KBD_EVENTS rows 6 (buttons, col = MAME BUTTONS bit) and 7 (col = switch
     // position) drive it; PAL=1 for the PAL machines (vsmilebsw)

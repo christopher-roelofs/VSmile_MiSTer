@@ -634,6 +634,7 @@ vsmile console
     .baby_buttons(baby_s),
     .baby_mode  (status[17:16]),
     .dummy_bios (1'b1),
+    .on_button  (1'b1),
 
     .mem_req    (mem_req),
     .mem_addr   (mem_addr),
