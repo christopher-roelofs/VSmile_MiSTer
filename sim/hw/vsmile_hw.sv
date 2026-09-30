@@ -16,6 +16,7 @@ module vsmile_hw (
     input  logic [7:0]  baby_buttons,
     input  logic [1:0]  baby_mode,
     input  logic        dummy_bios,
+    input  logic        on_button,
     input  logic [2:0]  ud_level, lr_level,
     input  logic        kbd,
     input  logic        mat,
@@ -74,7 +75,7 @@ module vsmile_hw (
     logic [15:0] mem_wdata;
 
     vsmile console (
-        .clk, .reset, .ce, .clk_vid, .pal, .mame_timing, .region, .has_bios, .motion, .baby, .baby_buttons, .baby_mode, .dummy_bios, .mat, .pen(1'b0), .pen_down(1'b0), .pen_x(10'd0), .pen_y(8'd0),
+        .clk, .reset, .ce, .clk_vid, .pal, .mame_timing, .region, .has_bios, .motion, .baby, .baby_buttons, .baby_mode, .dummy_bios, .on_button, .mat, .pen(1'b0), .pen_down(1'b0), .pen_x(10'd0), .pen_y(8'd0),
         .mem_req, .mem_addr, .mem_ack, .mem_rdata, .cart_mask,
         .cart_ram(1'b0), .mem_wr, .mem_wdata, .mem_wbusy(wr_busy),
         .joy, .ud_level, .lr_level, .kbd, .kb_keys, .kb_layout,
