@@ -34,6 +34,12 @@ HALF = 8 * 1024 * 1024
 # toystor3mfr crashes in MAME (unknown opcode at 0x10008B) and runs swapped;
 # cars2mfr as listed never plays a sample or reads the controller in 3 min
 # of scripted play, swapped it does both.  Checked 2026-09-29.
+# MAME sets whose LOW/HIGH offsets are the wrong way round: joined as listed
+# they stall (cars2mge: no sound or controller reads in 2 min of scripted
+# play) or crash (toystor3mge at frame 34); swapped they play like the other
+# 16 MB carts.  Joined and checked with the offsets exchanged.
+MAME_OFFSETS_SWAPPED = {'toystor3mge', 'cars2mge'}
+
 KNOWN_HIGH_FIRST = {
     '1ba5162181b29757335ab92451c3e164919e9c74': 'toystor3mfr',
     '0ff3fe336369f95dec640a5ca691daabacbc5332': 'cars2mfr',
@@ -54,6 +60,9 @@ def load_lists():
                 a = dict(re.findall(r'(\w+)="([^"]*)"', r))
                 if 'sha1' in a:
                     roms.append((int(a.get('offset', '0'), 0), int(a['size'], 0), a['sha1'], a['name']))
+            if name in MAME_OFFSETS_SWAPPED and len(roms) == 2 and roms[0][1] == roms[1][1]:
+                (o0, s0, h0, n0), (o1, s1, h1, n1) = roms
+                roms = [(o1, s0, h0, n0), (o0, s1, h1, n1)]
             roms.sort()
             sets[(x, name)] = (desc, roms, area)   # names repeat across lists (carebear)
             if len(roms) == 1:
