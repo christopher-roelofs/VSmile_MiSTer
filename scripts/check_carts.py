@@ -36,9 +36,9 @@ HALF = 8 * 1024 * 1024
 # of scripted play, swapped it does both.  Checked 2026-09-29.
 # MAME sets whose LOW/HIGH offsets are the wrong way round: joined as listed
 # they stall (cars2mge: no sound or controller reads in 2 min of scripted
-# play) or crash (toystor3mge at frame 34); swapped they play like the other
-# 16 MB carts.  Joined and checked with the offsets exchanged.
-MAME_OFFSETS_SWAPPED = {'toystor3mge', 'cars2mge'}
+# play) or crash (toystor3mge and toystor3msp at frame 34); swapped they play
+# like the other 16 MB carts.  Joined and checked with the offsets exchanged.
+MAME_OFFSETS_SWAPPED = {'toystor3mge', 'toystor3msp', 'cars2mge'}
 
 KNOWN_HIGH_FIRST = {
     '1ba5162181b29757335ab92451c3e164919e9c74': 'toystor3mfr',

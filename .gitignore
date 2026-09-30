@@ -16,3 +16,4 @@ c5_pin_model_dump.txt
 jtag.cdf
 PLLJ_PLLSPE_INFO.txt
 other/
+tools/unsp_dasm/unsp_dasm

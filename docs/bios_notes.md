@@ -60,10 +60,67 @@ the real ROM); the other 5 early stops are bad/partial dumps, Baby carts
 and dumps that also fail with the real ROM.  With the dummy, games lose the
 VTech intro and the system ROM's sound effects.
 
+## The intro library in the carts
+
+Every cart links VTech's system library; the intro is a small script
+interpreter in it that plays data from the system ROM.  Addresses below are
+for Alphabet Park Adventure (USA) (Rev 1); tools/unsp_dasm builds MAME's uNSP
+disassembler standalone (unsp_dasm ROM START COUNT) and find_calls.py finds
+call sites.
+
+Start-up (0x062030-0x062085, system init 0x06E926):
+- ID check (0x06ED3E): slot 13 compared over 20 words with the cart's own
+  "TV 1.0"; RAM [0x1A] = 0 on a match, 0xFFFF otherwise.  It picks which of
+  two table layouts later lookups use (slot 8 based when 0, slot 14 based
+  otherwise), so v102 ("TVSYS  ... 3.0") runs the slot 14 path.
+- Pointer check (0x06EE65): the high words of slots 0, 1 and 3-13 must be
+  0x30-0x3F (inside the system ROM window); otherwise RAM [0x0F] = 0xFFFF and
+  the cart skips everything that uses the system ROM (the dummy's path).
+- Slots 0/1 copied to RAM [8..11]; slot 2's value goes to the PPU tile and
+  sprite segment registers 0x2820-0x2822 (0x2000: graphics addressed from
+  word 0x80000, so tile numbers reach into the system ROM at 0x300000).
+- The VTech Intro switch is port C bit 4 (0x07C997).
+
+Slot 24 is the intro script table: {0, 0, N, N script pointers (intro on),
+N (intro off), ...}.  RAM [0x26] rotates through the N variants (it survives
+a reset).  Each script pointer leads to 16 per-language pointers, indexed by
+the region nibble (port C bits 3:0, 0x07CA92).  v102 has N = 3 but all three
+variants are the same script; the intro-off scripts are two ops that jump
+(op 9) into the intro-on script past the VTech logo.
+
+Script = (op, arg) word pairs, interpreted at 0x062633:
+| op | meaning (as far as traced) |
+|---|---|
+| 1 | load a list of resources (ptr to list ending 0xFFFF) |
+| 2 | two-word call (0x06EB6C) |
+| 3, 4 | sequence helpers (0x062C07 / 0x062C7E) |
+| 5 | image from the slot 0 table onto layer 2 (arg & 0x7FFF = index); 0xFFFF clears |
+| 6 | image from the slot 0 table onto layer 1 (0x06E84F); 0xFFFF clears |
+| 7 | 0x06287C (list of word pairs) |
+| 8 | wait N frames; a button press may end it |
+| 9 | jump (arg: 32-bit pointer to the next script word) |
+| 0xA | sound/music (0x06C5A6; arg & 0x7FFF) |
+| 0xB | wait until N frames have passed (frame counter 0x225C) |
+| 0xC, 0xD, 0xE | state (0xE 0x7FFF at the start of each script) |
+| 0xFFFF | end |
+
+So the intro's content and length are entirely data: an open BIOS decides
+both.
+
+## System ROM data formats (v102, as reference only)
+
+- Slot 0: 252 image entries of 10 words: {ptr to a 9-word header, ptr to a
+  tile/character number, 4 x 0xFFFF, ptr to the pixel data}.  The header
+  seen: {0x00F2, 64, 64, 0, 0x0F, 1, 1, 0, 0x600}: 64x64 at 6 bpp = 0x600
+  words; the character number = (pixel address - 0x80000) / 0x600.
+- Slot 1: {ptr, then 8 pointers to 256-colour RGB555 palettes 0x100 apart}.
+- Sound: ADPCM samples at 0x84000-0x95xxx, played straight from the ROM by
+  the SPU (channel mode 0x9038: ADPCM, address bits 21:16 = 0x38).
+- Picture data streamed by the PPU: 0xA0000-0xE4FFF (image frames in 0x600
+  and 0x200-word blocks), 0xF08C0-0xF13FF.
+
 ## For an open BIOS with our own intro
 
-Needed per slot: the structure the carts' intro/sound code expects (the
-directories in 3/4/7, the graphics lists in 0/1, the music data in 8-11),
-and an ID string in slot 13 that makes carts use them.  Next step: trace a
-cart's intro path with the real ROM and map which fields it reads from each
-slot, then build original assets in those structures.
+Same table shape and the TVSYS ID (an interface marker the carts test, not
+content), valid pointers, and our own images, palettes, samples, jingles
+and scripts in these formats; the scripts set how long the intro is.
