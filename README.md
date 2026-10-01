@@ -129,22 +129,119 @@ Keyboard for the four keyboard carts (a key table only they carry; model US,
 or French/German by product number 80-091445/80-091444), the Gym Mat for
 the four mat carts (80-09132x) and the Art Studio tablet for the Art Studio
 carts (80-0670xx, which also get their 2 MB cart RAM), otherwise the
-joystick.  Both can be forced in the OSD.  The mat's squares are on the pad
-as the joystick's buttons (arrows the d-pad, centre ABC/Start) and on the
-numeric keypad laid out like the mat (7 8 9 / 4 5 6 / 1 2 3, Enter 0 -
-for Enter Exit Help); the tablet's pen follows a USB mouse (left button
-presses) or the left stick (B presses).  The Art Studio's drawings are kept
+joystick.  Both can be forced in the OSD.  The Art Studio's drawings are kept
 in saves/VSmile/<cart>.sav (Save Backup RAM, or Autosave).  See
 docs/art_studio.md.  Options: TV mode (NTSC/PAL), region (sets the
-language the system ROM and games use), VTech intro on/off.  Controls:
-d-pad, Green/Blue/Yellow/Red, OK/Quit/Help/ABC on joystick 1 (a V.Smile
-joystick has exactly these).
+language the system ROM and games use), VTech intro on/off.  Controls: see
+[Controls](#controls) below.
 
 Video is 320x240 progressive at 59.94 Hz (PAL: 320x288 at 50 Hz), 6.75 MHz
 pixel rate, through the framework's scaler.  Audio is the SPU's 70,312.5 Hz
 stereo stream.  The console, SDRAM controller and hps_io run on a 108 MHz
 clock (4x the console's 27 MHz); the scan-out and the framework's video path
 on 54 MHz from the same PLL.  The CPU's cycle credit absorbs SDRAM latency.
+
+## Controls
+
+Button names are MiSTer's default pad layout (SNES-style): B / X / Y / A
+face buttons, L / R shoulders, Select, Start.  They can be remapped in the
+MiSTer menu (Define joystick buttons).  Console and Port 1 on Auto pick the
+right machine and controller for each cart.
+
+### V.Smile joystick (standard carts, V.Smile Motion carts)
+
+| V.Smile | Pad | Keyboard |
+|---|---|---|
+| Joystick | D-pad, or left analog stick (graded: a small push moves slowly, as on the real joystick) | |
+| Green | B | |
+| Blue | X | |
+| Yellow | Y | |
+| Red | L | |
+| OK (Enter) | A | Enter |
+| Quit (Exit) | Select | Esc |
+| Help | R | F1 |
+| ABC | Start | |
+
+V.Smile Motion carts are played with this joystick (no tilt control).
+
+### V.Smile Baby (Baby carts; Console Auto detects them)
+
+The Baby has no joystick; the d-pad doubles the colour buttons.
+
+| V.Smile Baby | Pad |
+|---|---|
+| Yellow | Y or D-pad Left |
+| Blue | X or D-pad Up |
+| Green | B or D-pad Down |
+| Red | L or D-pad Right |
+| Orange | A |
+| Cloud | R |
+| Ball | Start |
+| Exit | Select |
+| Function switch | OSD > Baby Switch (Play Time / Watch & Learn / Learn & Explore) |
+
+### Smart Keyboard (Smart Keyboard / Smart Key / Tip Tap / Teclado carts; Port 1 Auto detects them)
+
+Use a USB keyboard.  Keys are mapped by position, so an AZERTY/QWERTZ
+keyboard types its own letters with the French/German cart.
+
+| Smart Keyboard | USB keyboard / pad |
+|---|---|
+| Letters, digits, `-` `,` `.` Space, Backspace, Shift, Caps Lock ... | as printed |
+| Typing Time (Mode Dactylo) | Tab |
+| Erase | `]` |
+| Player 1 / Player 2 | Keypad 1 / Keypad 2 |
+| Symbol | Keypad + |
+| Arrow keys | Arrow keys |
+| Keyboard's joystick | D-pad / left stick |
+| OK / Quit / Help | Enter / Esc / F1 (or A / Select / R) |
+
+### Gym Mat (Jammin' Gym Class, Lern- und Tanzmatte, Tapis Multisport, Gimnasio Interactivo; Port 1 Auto detects them)
+
+| Mat square | Pad | Numeric keypad (laid out like the mat) |
+|---|---|---|
+| 1 red paw (top-left) | L | 7 |
+| 2 up arrow | D-pad Up | 8 |
+| 3 yellow paw | Y | 9 |
+| 4 left arrow | D-pad Left | 4 |
+| 5 centre star | Start | 5 |
+| 6 right arrow | D-pad Right | 6 |
+| 7 blue paw | X | 1 |
+| 8 down arrow | D-pad Down | 2 |
+| 9 green paw | B | 3 |
+| Enter | A | Keypad Enter |
+| Exit | Select | Keypad 0 |
+| Help | R | Keypad - |
+
+### Art Studio drawing tablet (Art Studio / Zeichenatelier / Studio De Dessin / Tecknarstudio / Estudio De Arte; Port 1 Auto detects them)
+
+| Tablet | Control |
+|---|---|
+| Move the pen | USB mouse, or left analog stick |
+| Press the pen | Left mouse button, or B |
+| OK / Quit / Help | A / Select / R (keyboard: Enter / Esc / F1) |
+
+The cart's memory (where the Art Studio keeps its saved pictures) is stored
+in `saves/VSmile/<cart>.sav`: OSD > Save Backup RAM (closes the OSD, a
+message shows when done), or Autosave On (saves when the OSD is opened
+after drawing, once it is closed).  It is loaded again when the same cart
+is loaded.  This is not a save state: the cart restarts, with its saved
+pictures kept.
+
+### OSD options
+
+| Option | Values |
+|---|---|
+| TV Mode | NTSC / PAL |
+| Region | language/region the system ROM and games use |
+| VTech Intro | on / off |
+| Console | Auto / V.Smile / V.Smile Motion / V.Smile Baby |
+| Port 1 | Auto / Joystick / Keyboard US / FR / DE / Gym Mat / Art Studio |
+| Baby Switch | the V.Smile Baby's function switch |
+| Audio | Stereo / Mono (Pocket) |
+| Autosave, Load Backup RAM, Save Backup RAM | Art Studio carts only |
+
+Screenshots are MiSTer's own: Win+PrtScr (`screenshots/VSmile/`).
 
 ## Layout
 
