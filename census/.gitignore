@@ -4,3 +4,7 @@ stamped/
 sweep/
 *_run*.log
 audio/
+bios/
+bios_motion/
+nobios/
+tosec/

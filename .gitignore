@@ -17,3 +17,15 @@ jtag.cdf
 PLLJ_PLLSPE_INFO.txt
 other/
 tools/unsp_dasm/unsp_dasm
+baby/
+__pycache__/
+*.log
+snap/
+cfg/
+releases/*dbg*.rbf
+releases/VSmile_20260926_b18.rbf
+releases/VSmile_b19.rbf
+releases/VSmile_b20.rbf
+releases/VSmile_b22.rbf
+releases/VSmile_b23.rbf
+releases/VSmile_b42.rbf
