@@ -511,6 +511,9 @@ module spg2xx_spu (
                 a36_hdr[ch] <= mem_rdata;
                 a36_rem[ch] <= 4'd8;
                 a36rem_r    <= 4'd8;
+                // eight words remain now: a second fetch in this tick must
+                // not read another header (MAME tests m_remaining per fetch)
+                hdr_need    <= 1'b0;
                 na = w_waddr + 22'd1;
                 w[C_MODE][5:0]    <= na[21:16];
                 w[C_WAVE_ADDR]    <= na[15:0];
