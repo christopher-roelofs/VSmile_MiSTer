@@ -122,7 +122,9 @@ as of this build.**
 
 System ROMs load from these files when the core starts; games boot without
 them.  Cartridges load from the OSD (`Load Cartridge`, plain `.bin` dumps as
-in MAME's `vsmile_cart` list).  Console Auto picks the system per cart:
+in MAME's `vsmile_cart` list).  A V.Smile Baby system ROM (8 MB, e.g.
+MAME's vsmilebabybios.bin) loaded with `Load Cartridge` plays its built-in
+game, as the console does with no cart (Baby carts do not need it).  Console Auto picks the system per cart:
 V.Smile Baby (reset vector below 0x8000), V.Smile Motion (its "V.Smile\084"
 product record, with boot1.rom present), otherwise V.Smile.  Port 1 Auto plugs in the Smart
 Keyboard for the four keyboard carts (a key table only they carry; model US,
