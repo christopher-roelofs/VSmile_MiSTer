@@ -1,5 +1,5 @@
-// Scan-out of the PPU line buffer as a 320x240 (NTSC, 59.94 Hz) or 320x288
-// (PAL, 50 Hz) progressive picture with a 6.75 MHz pixel clock: 429 (PAL:
+// Scan-out of the PPU line buffer as a 320x240 picture (NTSC, 59.94 Hz, or
+// PAL, 50 Hz) with a 6.75 MHz pixel clock: 429 (PAL:
 // 432) pixel periods per line, matching the SoC's 1716 / 1728 system-clock
 // line.  Runs on the 54 MHz video clock (half the SoC clock, same PLL):
 // the SoC's line tick count `hcnt` changes every 4 SoC clks = every 2 video
@@ -24,11 +24,17 @@ module vsmile_video (
     output logic        hs, vs, hblank, vblank
 );
 
-    // pixel positions (in 4-tick pixel periods)
-    localparam H_ACT_START = 9'd60;     // 320 active pixels from here
+    // pixel positions (in 4-tick pixel periods, 148 ns each).  Active video
+    // is centred in a 15 kHz CRT's visible window: 4.7 us sync, 8.0 us
+    // back porch, 47.4 us picture, 3.4 us front porch (NTSC; PAL 3.8 us).
+    // A short back porch puts the picture far left on a CRT, and lets TVs
+    // that clamp black late sample the picture's left edge.
+    localparam H_ACT_START = 9'd94;     // 320 active pixels from here
     localparam H_SYNC_START = 9'd8, H_SYNC_LEN = 9'd32;
-    localparam V_SYNC_START_N = 9'd245, V_SYNC_START_P = 9'd290, V_SYNC_LEN = 9'd3;
-    wire [8:0] v_act = pal ? 9'd288 : 9'd240;   // PAL games still render 240 lines
+    // The PPU renders 240 lines in both modes; in PAL they are centred in
+    // the 312-line frame (24 lines lower than a 288-line picture would start).
+    localparam V_SYNC_START_N = 9'd245, V_SYNC_START_P = 9'd266, V_SYNC_LEN = 9'd3;
+    localparam V_ACT = 9'd240;
 
     // resample the SoC's counters; a pixel period starts when hcnt has just
     // become a multiple of 4
@@ -54,10 +60,10 @@ module vsmile_video (
             // fetch the next pixel's colour: out_x leads by one period
             out_x  <= (px + 9'd1 >= H_ACT_START) ? (px + 9'd1 - H_ACT_START) : 9'd0;
             hblank <= !(px >= H_ACT_START && px < H_ACT_START + 9'd320);
-            vblank <= (vpos_s >= v_act);
+            vblank <= (vpos_s >= V_ACT);
             hs     <= (px >= H_SYNC_START && px < H_SYNC_START + H_SYNC_LEN);
             vs     <= (vpos_s >= vs_start && vpos_s < vs_start + V_SYNC_LEN);
-            if (px >= H_ACT_START && px < H_ACT_START + 9'd320 && vpos_s < v_act)
+            if (px >= H_ACT_START && px < H_ACT_START + 9'd320 && vpos_s < V_ACT)
                 {r, g, b} <= rgb_in;
             else
                 {r, g, b} <= 24'd0;
