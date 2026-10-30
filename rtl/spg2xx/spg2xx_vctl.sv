@@ -150,6 +150,7 @@ module spg2xx_vctl (
             regs <= '{default: 16'd0};
             regs[8'h36] <= 16'hffff;
             regs[8'h37] <= 16'hffff;
+            regs[8'h42] <= 16'h0001;
             irq_en <= 0;
             irq_st <= 0;
         end else begin
