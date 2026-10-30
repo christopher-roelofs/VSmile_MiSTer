@@ -18,7 +18,7 @@
 // y[0]; the other buffer is read by the scan-out through `out_*`.
 //
 // Not implemented (no V.Smile title uses them): bitmap/line-map mode,
-// vertical compression, hi-colour, the saturation control (0x3C != 0x20).
+// hi-colour, the saturation control (0x3C != 0x20).
 // Fade (0x30) is applied at the output.
 
 module spg2xx_ppu (

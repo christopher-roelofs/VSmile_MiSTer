@@ -43,7 +43,7 @@ static int run(bool pal) {
                 vpos = (vpos == lines - 1) ? 0 : vpos + 1;
                 if (vpos == 0) {
                     if (frames >= 1) {
-                        int exp_act = pal ? 288 : 240;
+                        int exp_act = 240;
                         if (act_lines != exp_act) { printf("frame: %d active lines (expected %d)\n", act_lines, exp_act); fails++; }
                         if (vs_lines != 3) { printf("frame: vsync %d lines\n", vs_lines); fails++; }
                     }
