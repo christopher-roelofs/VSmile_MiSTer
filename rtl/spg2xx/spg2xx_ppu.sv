@@ -376,6 +376,11 @@ module spg2xx_ppu (
                     cnt  <= 10'd0;
                     rs   <= R_CLEAR;
                     mem_req <= 1'b0;
+                end else if (ny == 9'd240) begin
+                    if (rs != R_IDLE) overrun <= 1'b1;
+                    cur  <= ~cur;           // show line 239
+                    rs   <= R_IDLE;
+                    mem_req <= 1'b0;
                 end
             end else case (rs)
 
