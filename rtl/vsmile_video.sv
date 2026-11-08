@@ -1,5 +1,5 @@
-// Scan-out of the PPU line buffer as a 320x240 picture (NTSC, 59.94 Hz, or
-// PAL, 50 Hz) with a 6.75 MHz pixel clock: 429 (PAL:
+// Scan-out of the PPU line buffer as a 320x240 picture (NTSC, 60.05 Hz, or
+// PAL, 50.08 Hz) with a 6.75 MHz pixel clock: 429 (PAL:
 // 432) pixel periods per line, matching the SoC's 1716 / 1728 system-clock
 // line.  Runs on the 54 MHz video clock (half the SoC clock, same PLL):
 // the SoC's line tick count `hcnt` changes every 4 SoC clks = every 2 video

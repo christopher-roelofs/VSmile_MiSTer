@@ -28,8 +28,8 @@ module spg2xx (
     input  logic        mame_timing,    // MAME-exact 60 Hz frame (verification)
 
     // external bus (cart / system ROM): reads return the aligned group of
-    // four words containing ext_addr (word 0 in [15:0]); writes are ignored
-    // by the board (ROM) but still handshaken
+    // four words containing ext_addr (word 0 in [15:0]); writes are posted
+    // (no ext_ack) and drop any cached copy of their group
     output logic        ext_req,        // one-clk issue pulse; data comes back in order
     output logic        ext_wr,
     output logic [21:0] ext_addr,

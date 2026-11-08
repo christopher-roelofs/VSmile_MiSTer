@@ -5,7 +5,7 @@
 //
 // Timing: MAME models a 320x262 screen at exactly 60 Hz with no blanking in
 // the horizontal axis.  Here a line is 1716 system clocks at 27 MHz (NTSC,
-// 262 lines, 59.94 Hz) or 1728 clocks (PAL, 312 lines); `hpos` is MAME's
+// 262 lines, 60.05 Hz) or 1728 (PAL, 312 lines, 50.08 Hz); `hpos` is MAME's
 // 0-319 horizontal position scaled over the whole line.  `mame_timing`
 // instead stretches NTSC lines to 1717/1718 clocks so a frame is exactly
 // 450,000 clocks, as in MAME (used for lockstep verification).
@@ -150,6 +150,7 @@ module spg2xx_vctl (
             regs <= '{default: 16'd0};
             regs[8'h36] <= 16'hffff;
             regs[8'h37] <= 16'hffff;
+            regs[8'h42] <= 16'h0001;
             irq_en <= 0;
             irq_st <= 0;
         end else begin
